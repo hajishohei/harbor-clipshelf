@@ -192,28 +192,6 @@ function appPath(req) {
   return ObjC.unwrap(url.path);
 }
 
-// The app's real icon as a PNG (base64). Electron's app.getFileIcon only
-// gives the generic icon for the file type on macOS.
-function appIcon(req) {
-  var p = req.path;
-  if (!p && req.bundleId) p = appPath({ bundleId: req.bundleId });
-  if (!p) return null;
-  var size = Math.max(16, Math.min(256, Number(req.size) || 64));
-  var icon = $.NSWorkspace.sharedWorkspace.iconForFile($(p));
-  if (!icon || icon.isNil()) return null;
-  var canvas = $.NSImage.alloc.initWithSize($.NSMakeSize(size, size));
-  canvas.lockFocus;
-  icon.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, size, size), $.NSZeroRect, 2, 1.0); // NSCompositingOperationSourceOver
-  canvas.unlockFocus;
-  var tiff = canvas.TIFFRepresentation;
-  if (!tiff || tiff.isNil()) return null;
-  var rep = $.NSBitmapImageRep.imageRepWithData(tiff);
-  if (!rep || rep.isNil()) return null;
-  var png = rep.representationUsingTypeProperties(4, $({})); // NSBitmapImageFileTypePNG
-  if (!png || png.isNil()) return null;
-  return ObjC.unwrap(png.base64EncodedStringWithOptions(0));
-}
-
 function foreground() {
   var fa = frontApp();
   var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
@@ -237,7 +215,6 @@ function handle(req) {
     case 'paste': return paste();
     case 'foreground': return foreground();
     case 'appPath': return appPath(req);
-    case 'appIcon': return appIcon(req);
     default: throw new Error('unknown-command:' + req.cmd);
   }
 }
