@@ -79,6 +79,32 @@ def draw_panda(style='outline', awake=False):
     return m
 
 
+def menubar_mask(grow):
+    """The menu bar artwork (white line art on transparent) as a clean mask."""
+    import numpy as np
+    art = Image.open(os.path.join(ART, "panda-menubar.png")).convert("RGBA")
+    a = np.array(art)
+    mask = Image.fromarray(((a[..., 3] > 160) * 255).astype("uint8"), "L")
+    mask = mask.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))  # drop speckles
+    mask = mask.crop(mask.getbbox())
+    side = max(mask.size)
+    pad = int(side * 0.02)
+    sq = Image.new("L", (side + 2 * pad, side + 2 * pad), 0)
+    sq.paste(mask, ((sq.width - mask.width) // 2, (sq.height - mask.height) // 2))
+    if grow:
+        sq = sq.filter(ImageFilter.MaxFilter(grow))  # thicker lines so they survive 22pt
+    return sq
+
+
+def awake_badge(mask):
+    out = mask.copy()
+    d = ImageDraw.Draw(out)
+    s = out.size[0]
+    d.ellipse([s * 0.62, s * 0.62, s * 1.0, s * 1.0], fill=0)
+    d.ellipse([s * 0.68, s * 0.68, s * 0.96, s * 0.96], fill=255)
+    return out
+
+
 def glyph_png(mask, px, color=(0, 0, 0)):
     a = mask.resize((px, px), Image.LANCZOS)
     img = Image.new("RGBA", (px, px), color + (0,))
@@ -121,9 +147,10 @@ def main():
         t.save(os.path.join(ASSETS, f"tray{scale}.png"))
         with_dot(t, (255, 170, 0, 255), (255, 255, 255, 255)).save(os.path.join(ASSETS, f"trayAwake{scale}.png"))
     # macOS menu bar: monochrome template glyph (1x = 22pt, 2x = 44px)
-    plain = draw_panda()
-    awake = draw_panda(awake=True)
-    for scale, px in (("", 22), ("@2x", 44)):
+    use_art = os.path.exists(os.path.join(ART, "panda-menubar.png"))
+    for scale, px, grow in (("", 22, 21), ("@2x", 44, 15)):
+        plain = menubar_mask(grow) if use_art else draw_panda()
+        awake = awake_badge(plain) if use_art else draw_panda(awake=True)
         glyph_png(plain, px).save(os.path.join(ASSETS, f"trayTemplate{scale}.png"))
         glyph_png(awake, px).save(os.path.join(ASSETS, f"trayAwakeTemplate{scale}.png"))
     docs = os.path.join(ROOT, "docs")
