@@ -1,12 +1,13 @@
-# Mac 用の1行インストーラ（scripts/install-mac.sh）を、公開中の最新リリースに対して
-# 実際の macOS で動かして確認します。インストーラを変更したとき・手動実行で動きます。
+# 社員向けの1行インストーラ（scripts/install-mac.sh / install-windows.ps1）を、
+# 公開中の最新リリースに対して実際の macOS / Windows で動かして確認します。
+# インストーラを変更したとき・手動実行（Actions → install-check → Run workflow）で動きます。
 name: install-check
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['scripts/install-mac.sh']
+    paths: ['scripts/install-mac.sh', 'scripts/install-windows.ps1']
 
 permissions:
   contents: read
@@ -33,3 +34,37 @@ jobs:
       - name: Quit
         if: always()
         run: pkill -f "/HarboR ClipShelf.app/Contents/MacOS/" || true
+
+  windows-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the installer the same way staff do (irm | iex, Windows PowerShell 5.1)
+        shell: powershell
+        run: Get-Content scripts/install-windows.ps1 -Raw -Encoding UTF8 | Invoke-Expression
+      - name: Check the installed app
+        shell: powershell
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\HarboR ClipShelf\HarboR ClipShelf.exe'
+          if (-not (Test-Path $exe)) { throw "not installed at $exe" }
+          (Get-Item $exe).VersionInfo | Format-List ProductVersion, FileVersion
+          $zone = Get-Item $exe -Stream Zone.Identifier -ErrorAction SilentlyContinue
+          if ($zone) { throw 'Mark-of-the-Web is set (SmartScreen would warn)' }
+          Start-Sleep -Seconds 8
+          if (-not (Get-Process -Name 'HarboR ClipShelf' -ErrorAction SilentlyContinue)) { throw 'app did not start' }
+          Get-Process -Name 'HarboR ClipShelf' | Select-Object -First 3 Id, Path | Format-Table
+      - name: Re-run while the app is running (update in place)
+        shell: powershell
+        run: |
+          Get-Content scripts/install-windows.ps1 -Raw -Encoding UTF8 | Invoke-Expression
+          Start-Sleep -Seconds 8
+          if (-not (Get-Process -Name 'HarboR ClipShelf' -ErrorAction SilentlyContinue)) { throw 'app did not start again' }
+      - name: PowerShell 7 can run it too (download + checksum only)
+        shell: pwsh
+        run: |
+          $env:CLIPSHELF_DRYRUN = '1'
+          Get-Content scripts/install-windows.ps1 -Raw | Invoke-Expression
+      - name: Quit
+        if: always()
+        shell: powershell
+        run: Get-Process -Name 'HarboR ClipShelf' -ErrorAction SilentlyContinue | Stop-Process -Force
