@@ -1,0 +1,35 @@
+# Mac 用の1行インストーラ（scripts/install-mac.sh）を、公開中の最新リリースに対して
+# 実際の macOS で動かして確認します。インストーラを変更したとき・手動実行で動きます。
+name: install-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/install-mac.sh']
+
+permissions:
+  contents: read
+
+jobs:
+  mac-install:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the installer the same way staff do (curl | bash)
+        run: cat scripts/install-mac.sh | bash
+      - name: Check the installed app
+        run: |
+          set -e
+          APP="/Applications/HarboR ClipShelf.app"
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          if xattr -p com.apple.quarantine "$APP" >/dev/null 2>&1; then echo "::error::quarantine flag is set"; exit 1; fi
+          sleep 5
+          pgrep -fl "/HarboR ClipShelf.app/Contents/MacOS/" || { echo "::error::app did not start"; exit 1; }
+      - name: Re-run (update in place while running)
+        run: cat scripts/install-mac.sh | bash
+      - name: Quit
+        if: always()
+        run: pkill -f "/HarboR ClipShelf.app/Contents/MacOS/" || true
