@@ -85,6 +85,12 @@ Xcode や Visual Studio Build Tools がなくてもビルドできます（そ�
 ### 署名について
 
 - **Mac**：Apple Developer ID での署名・公証はしていません（ad-hoc 署名のみ）。ブラウザでダウンロードした場合は初回だけ INSTALL_GUIDE.md の手順（「このまま開く」）が必要です。社員には、この確認が出ない1行インストーラ（`curl -fsSL https://raw.githubusercontent.com/hajishohei/harbor-clipshelf/main/scripts/install-mac.sh | bash`、中身は `scripts/install-mac.sh`：最新リリースの zip をチェックサム確認のうえ「アプリケーション」へ配置して起動）を案内してください。動作は `install-check` ワークフローが実際の macOS で確認します。アプリ内アップデートで入れた版では、この手順は不要です。手順や許可の付け直しをなくしたい場合は Apple Developer Program（有料）で署名・公証してください（`package.json` の `build.mac.identity` を変更）。
+- **Mac の許可をアップデート後も保つ（おすすめ）**：ad-hoc 署名のままだと、アップデートのたびに macOS が「別のアプリ」とみなし、アクセシビリティ等の許可が外れます。自作の署名用証明書を GitHub の secret `MAC_SIGNING_CERT` に登録すると、ビルドのたびに同じ証明書で署名し直す（`scripts/after-sign.js`）ので、社員は最初に1回許可すれば以後は不要になります。
+  1. `bash scripts/make-signing-cert.sh ~/clipshelf-cert` を実行（`MAC_SIGNING_CERT.txt` ができます）
+  2. GitHub の Settings → Secrets and variables → Actions → New repository secret で、名前 `MAC_SIGNING_CERT`、値に `MAC_SIGNING_CERT.txt` の中身を貼って保存
+  3. 登録後は `MAC_SIGNING_CERT.txt` を削除（この値があれば誰でも「HarboR ClipShelf」として署名できるため、共有しない）
+  - 仕組みの確認は `sign-check` ワークフロー（使い捨ての証明書で署名 → 2回のビルドで同じ要件になるか → 起動）で行います。build ワークフローの「Report signature」にどちらで署名されたかが出ます。
+  - 証明書に切り替えた最初の版だけは、社員側で一度「許可をやり直す」が必要です（アプリが案内します）。
 - **Windows**：コード署名はしていないため、ブラウザからダウンロードした初回インストール時に SmartScreen の確認が出ます（「詳細情報 → 実行」）。
 
 ---

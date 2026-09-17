@@ -12,7 +12,8 @@ class AppIcons {
   constructor({ windowService, log }) {
     this.ws = windowService;
     this.log = log;
-    this.file = path.join(app.getPath('userData'), 'app-icons.json');
+    // v2: v1 cached macOS's generic "application" icon for every app.
+    this.file = path.join(app.getPath('userData'), 'app-icons-v2.json');
     this.cache = {};
     this.pending = new Map();
     try {
@@ -21,6 +22,7 @@ class AppIcons {
       this.cache = {};
     }
     this.saveTimer = null;
+    fs.rm(path.join(app.getPath('userData'), 'app-icons.json'), { force: true }, () => {});
   }
 
   key(item) {
@@ -68,10 +70,23 @@ class AppIcons {
       file = null;
     }
     if (!file) return null;
-    const icon = await getFileIcon(file, { size: 'normal' });
+    let icon = null;
+    if (process.platform === 'darwin') {
+      try {
+        const b64 = await this.ws.appIcon({ path: file, size: 64 });
+        if (b64) icon = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'));
+      } catch (err) {
+        this.log.warn('[icons] native icon failed', err && err.message);
+      }
+      if (icon && icon.isEmpty()) icon = null;
+    } else {
+      icon = await getFileIcon(file, { size: 'large' });
+    }
     if (!icon) return null;
+    const { width } = icon.getSize();
+    const shown = width > 64 ? icon.resize({ width: 64, height: 64, quality: 'best' }) : icon;
     const small = icon.resize({ width: 32, height: 32, quality: 'good' });
-    return { icon: small.toDataURL(), color: dominantColor(small) };
+    return { icon: shown.toDataURL(), color: dominantColor(small) };
   }
 
   _save() {

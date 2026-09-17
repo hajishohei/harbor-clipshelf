@@ -14,10 +14,25 @@ const REF_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})#
 const isRef = (v) => typeof v === 'string' && REF_RE.test(v);
 
 // Items go to renderers without the heavy rich-text payloads.
+// Same key the clipboard watcher uses for history items ("t:…", "f:…", "i:…"),
+// so a pinned copy can be matched to its history entry.
+function contentHash(item) {
+  if (!item) return null;
+  const sha1 = (v) => crypto.createHash('sha1').update(v).digest('hex');
+  if ((item.type === 'text' || item.type === 'url') && typeof item.text === 'string') return `t:${sha1(item.text)}`;
+  if (item.type === 'image' && item.blob) return `i:${String(item.blob).slice(0, 64)}`;
+  if (item.type === 'file' && Array.isArray(item.files) && item.files.length && item.files.every((f) => f.path)) {
+    return `f:${sha1(item.files.map((f) => f.path).join('\n'))}`;
+  }
+  return null;
+}
+
 function lite(item) {
   if (!item) return null;
   const { html, rtf, ...rest } = item;
-  return { ...rest, hasRich: !!(html || rtf) };
+  const out = { ...rest, hasRich: !!(html || rtf) };
+  if (item.board === 'pin') out.matchHashes = [item.sourceHash, contentHash(item)].filter(Boolean);
+  return out;
 }
 
 function withoutIdentity(src) {
@@ -189,7 +204,8 @@ class ItemOps {
       );
     }
     const extra = board === 'pin' ? { pinboardId: pinboardId || require('./store').DEFAULT_PINBOARD_ID, order: -Date.now() } : {};
-    const created = this.store.create({ ...rest, board, ...extra });
+    const sourceHash = src.hash || src.sourceHash || contentHash(src);
+    const created = this.store.create({ ...rest, board, ...extra, ...(sourceHash ? { sourceHash } : {}) });
     if (created.type === 'file') prestage(this.settings, created).catch(() => {});
     return lite(created);
   }
@@ -459,4 +475,4 @@ class ItemOps {
   }
 }
 
-module.exports = { ItemOps, lite, withoutIdentity, isRef, REF_RE };
+module.exports = { ItemOps, lite, withoutIdentity, contentHash, isRef, REF_RE };

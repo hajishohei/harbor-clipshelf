@@ -54,3 +54,5 @@ body { background: var(--bg); user-select: none; }
 .welcome-steps .row .text > div:first-child::before { counter-increment: step; content: counter(step); display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; margin-right: 8px; }
 .kbdlist { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; padding: 10px 16px 14px; font-size: 12.5px; }
 .kbdlist span:nth-child(odd) { text-align: right; color: var(--muted); white-space: nowrap; }
+input.range { width: 160px; accent-color: var(--accent, #2f7cf6); }
+.row .control > .hint { min-width: 3.2em; text-align: right; margin-top: 0; font-variant-numeric: tabular-nums; }

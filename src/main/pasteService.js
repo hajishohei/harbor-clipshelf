@@ -1,5 +1,6 @@
 'use strict';
-const { dialog, systemPreferences } = require('electron');
+const { dialog } = require('electron');
+const accessibility = require('./accessibility');
 const io = require('./clipboardIO');
 const blobs = require('./blobs');
 const { resolveFilePaths } = require('./fileResolver');
@@ -109,21 +110,23 @@ class PasteService {
     this.panel.pushModal();
     try {
       const appName = this.panel.targetAppName() || '現在のアプリ';
+      const wasGranted = !!this.getSettings().accessibilityEverGranted;
       const { response, checkboxChecked } = await dialog.showMessageBox({
         type: 'question',
-        message: `${appName}に直接貼り付けますか？`,
-        detail: 'ClipShelf が他のアプリに直接貼り付けるには、「アクセシビリティ」へのアクセスが必要です。\n今回の内容はクリップボードにコピーしました（⌘V で貼り付けられます）。',
-        buttons: ['アクセシビリティへのアクセスを有効にする', '今はしない、クリップボードにコピーする'],
+        message: wasGranted ? 'アクセシビリティの許可をやり直してください' : `${appName}に直接貼り付けますか？`,
+        detail: wasGranted
+          ? 'アップデートで macOS の許可が外れました（システム設定で ON のままに見えても無効になっています）。\n「許可をやり直す」を押すと ClipShelf の古い許可を消して設定画面を開くので、ClipShelf を ON にしてください。\n今回の内容はクリップボードにコピーしました（⌘V で貼り付けられます）。'
+          : 'ClipShelf が他のアプリに直接貼り付けるには、「アクセシビリティ」へのアクセスが必要です。\n「許可する」を押すと設定画面が開くので、ClipShelf を ON にしてください。\n今回の内容はクリップボードにコピーしました（⌘V で貼り付けられます）。',
+        buttons: [wasGranted ? '許可をやり直す' : '許可する', '今はしない（クリップボードにコピー）'],
         defaultId: 0,
         cancelId: 1,
-        checkboxLabel: '今後表示しない（いつもクリップボードへコピーする）'
+        checkboxLabel: '今後表示しない（許可されるまでクリップボードへコピーする）'
       });
       if (response === 0) {
-        systemPreferences.isTrustedAccessibilityClient(true);
-        this.ws.openPrivacyPane('accessibility');
+        await accessibility.repair({ log: this.log });
         return 'enabling';
       }
-      if (checkboxChecked) this.setSettings({ pasteTarget: 'clipboard' });
+      if (checkboxChecked) this.setSettings({ pasteTarget: 'clipboard', pasteTargetByPrompt: true });
       return 'declined';
     } finally {
       this.panel.popModal();

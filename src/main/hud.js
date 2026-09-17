@@ -87,11 +87,12 @@ function show(title, body = '', { kind = 'ok', durationMs } = {}) {
   deliver(msg);
 }
 
-function sound(name) {
-  if (!['copy', 'paste'].includes(name)) return;
+// { key, bundled: 'copy'|'paste' } or { key, src: 'data:audio/wav;…' }, plus volume 0–1
+function sound(spec) {
+  if (!spec || (!['copy', 'paste'].includes(spec.bundled) && !/^data:audio\//.test(spec.src || ''))) return;
   const w = ensure();
   if (!ready || w.webContents.isLoading()) return;
-  w.webContents.send('hud:sound', name);
+  w.webContents.send('hud:sound', spec);
 }
 
 function destroy() {

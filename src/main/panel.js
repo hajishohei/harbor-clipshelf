@@ -32,6 +32,7 @@ class PastePanel {
     this.saveTimer = null;
     this.quitting = false;
     this.pendingShow = null;
+    this.dragOut = null; // { timer, faded, until }
   }
 
   _create() {
@@ -57,6 +58,7 @@ class PastePanel {
     });
     win.on('blur', () => {
       // Clicking anywhere else closes the panel, as in Paste.
+      if (this.dragOut) return;
       if (this.visible && this.modalDepth === 0 && !this.rendererModal && !this.quitting) this.hide({ restoreFocus: false, reason: 'blur' });
     });
     win.on('closed', () => {
@@ -122,6 +124,9 @@ class PastePanel {
     const win = this._ensure();
     const reveal = () => {
       if (win.isDestroyed()) return;
+      if (this.dragOut) this.endDragOut({ silent: true });
+      win.setIgnoreMouseEvents(false);
+      win.setOpacity(1);
       win.setBounds(this._bounds());
       win.webContents.send('panel:show', { ...opts, targetApp: this.targetAppName() });
       win.show();
@@ -131,6 +136,68 @@ class PastePanel {
     };
     if (this.ready) reveal();
     else this.pendingShow = reveal;
+  }
+
+  // ---------------------------------------------------------------- drag out
+  // Paste gets out of the way once a card is dragged off the panel, so the
+  // drop can land in the window behind it. We fade the panel out and let the
+  // mouse pass through it until the drag ends, then close it.
+  beginDragOut() {
+    const win = this.win;
+    if (!this.visible || !win || win.isDestroyed()) return;
+    this.endDragOut({ silent: true });
+    const state = { faded: false, timer: null, startedAt: Date.now(), sawSystemDrag: false };
+    this.dragOut = state;
+    const onDrag = (ev) => {
+      if (ev.active) state.sawSystemDrag = true;
+      else if (this.dragOut === state && Date.now() - state.startedAt > 150) this.endDragOut();
+    };
+    state.onDrag = onDrag;
+    if (this.monitor) this.monitor.on('drag', onDrag);
+    state.timer = setInterval(() => {
+      if (this.dragOut !== state || win.isDestroyed()) return;
+      if (Date.now() - state.startedAt > 60000) return this.endDragOut();
+      if (state.faded) return;
+      let p;
+      try {
+        p = screen.getCursorScreenPoint();
+      } catch {
+        return;
+      }
+      const b = win.getBounds();
+      const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+      if (!inside) {
+        state.faded = true;
+        win.setIgnoreMouseEvents(true);
+        win.setOpacity(0);
+      }
+    }, 50);
+  }
+
+  isDraggingOut() {
+    return !!this.dragOut;
+  }
+
+  endDragOut({ silent = false } = {}) {
+    const state = this.dragOut;
+    if (!state) return;
+    this.dragOut = null;
+    clearInterval(state.timer);
+    if (this.monitor && state.onDrag) this.monitor.off('drag', state.onDrag);
+    const win = this.win;
+    if (!win || win.isDestroyed()) return;
+    if (!state.faded) {
+      // Dropped back on the panel (or cancelled there): stay open.
+      return;
+    }
+    const restore = () => {
+      if (win.isDestroyed()) return;
+      win.setIgnoreMouseEvents(false);
+      win.setOpacity(1);
+    };
+    if (silent) return restore();
+    this.hide({ restoreFocus: false, reason: 'drag' });
+    setTimeout(restore, HIDE_ANIMATION_MS + 60);
   }
 
   targetAppName() {

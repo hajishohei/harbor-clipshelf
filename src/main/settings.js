@@ -42,6 +42,9 @@ const DEFAULT_SHORTCUTS = {
 // Shortcuts that only work while the Paste-style panel is open.
 const LOCAL_SHORTCUTS = ['nextPinboard', 'prevPinboard'];
 
+const sounds = require('./sounds');
+const soundDefaults = sounds.defaultsFor();
+
 const ENUMS = {
   appearance: ['system', 'light', 'dark'],
   historyRetention: ['day', 'week', 'month', 'year', 'forever'],
@@ -76,6 +79,14 @@ const DEFAULTS = {
   launchAtLogin: false,
   showMenuBarIcon: true,
   soundEffects: true,
+  // 'system:<名前>'（OS の効果音）/ 'clipshelf'（以前の音）/ 'none'
+  copySound: soundDefaults.copySound,
+  pasteSound: soundDefaults.pasteSound,
+  soundVolume: 60,
+  // 内部用（アクセシビリティの状態）
+  accessibilityEverGranted: false,
+  pasteTargetByPrompt: false,
+  accessibilityNoticeVersion: null,
   appearance: 'system',
 
   // --- クリップボード履歴（Paste 相当）
@@ -210,9 +221,11 @@ function normalize(parsed) {
     'ocrEnabled', 'ignoreTransient', 'ignoreConfidential', 'linkPreviews', 'showDuringScreenSharing', 'shelfEnabled',
     'shelfRemoveAfterDragOut', 'shelfStackMultiple', 'shelfQuickLookThumbnails', 'shelfResolveAliases',
     'shelfFaviconsForWebloc', 'shelfCollapseWhenIdle', 'shelfFollowActiveDisplay', 'screenOcrEnabled', 'windowSnapEnabled',
-    'firstRunCompleted']) {
+    'firstRunCompleted', 'accessibilityEverGranted', 'pasteTargetByPrompt']) {
     s[k] = typeof s[k] === 'boolean' ? s[k] : DEFAULTS[k];
   }
+  for (const k of ['copySound', 'pasteSound']) if (!sounds.validValue(s[k])) s[k] = DEFAULTS[k];
+  s.soundVolume = Number.isFinite(Number(s.soundVolume)) ? Math.max(0, Math.min(100, Math.round(Number(s.soundVolume)))) : DEFAULTS.soundVolume;
   if (!Number.isFinite(s.pausedUntil)) s.pausedUntil = null;
   if (!Number.isFinite(s.panelHeight)) s.panelHeight = null;
   else s.panelHeight = Math.max(120, Math.min(900, Math.round(s.panelHeight)));
@@ -222,6 +235,7 @@ function normalize(parsed) {
   if (!['system', 'display'].includes(s.keepAwake.mode)) s.keepAwake.mode = 'system';
   if (typeof s.skippedUpdateVersion !== 'string' || !s.skippedUpdateVersion) s.skippedUpdateVersion = null;
   if (typeof s.lastRunVersion !== 'string' || !s.lastRunVersion) s.lastRunVersion = null;
+  if (typeof s.accessibilityNoticeVersion !== 'string' || !s.accessibilityNoticeVersion) s.accessibilityNoticeVersion = null;
   s.updateCheckEnabled = s.updateCheckEnabled !== false;
   s.version = DEFAULTS.version;
   return s;

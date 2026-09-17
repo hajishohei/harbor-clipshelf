@@ -134,6 +134,12 @@ class WindowService {
     return this._request('appPath', { bundleId: bundleId || '', pid: Number(pid) || 0 }, { timeoutMs: 3000 });
   }
 
+  // macOS: the app's real icon (PNG, base64)
+  async appIcon({ path: p, size = 64 }) {
+    if (!this.supported || !platform.isMac || !p) return null;
+    return this._request('appIcon', { path: p, size }, { timeoutMs: 4000 });
+  }
+
   async activate(hwnd) {
     if (!platform.isWin || !hwnd) return false;
     return this._request('activate', { hwnd: String(hwnd) }, { timeoutMs: 3000 });

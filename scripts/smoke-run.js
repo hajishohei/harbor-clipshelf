@@ -192,6 +192,25 @@ module.exports = async function smoke(ctx) {
     const back = await inPanel(`window.__panel.state.boardId`);
     check('pinboard navigation shortcut', back !== board.id, back);
 
+    // a history card shows (and links to) the pinboard its content is saved in
+    await inPanel(`document.querySelector('.board[data-id="history"]').click()`);
+    await wait(400);
+    const chip = await inPanel(`(() => { const c = document.querySelector('.card[data-id="${url.id}"] .board-chip'); return c && c.textContent; })()`);
+    check('history card shows the pinboard it is saved in', chip === '営業テンプレ', String(chip));
+    const hc = await inPanel(`document.querySelector('.card[data-id="${url.id}"] header').style.getPropertyValue('--hc').trim()`);
+    const green = await inPanel(`getComputedStyle(document.documentElement).getPropertyValue('--c-green').trim()`);
+    check('history card header takes the pinboard colour', !!green && hc === green, `${hc} vs ${green}`);
+    const plainChip = await inPanel(`!!document.querySelector('.card[data-id="${rich.id}"] .board-chip')`);
+    check('unpinned history card has no pinboard chip', plainChip === false);
+    await shot(panel.win, '03b-panel-history-pinned');
+    await inPanel(`document.querySelector('.card[data-id="${url.id}"] .board-chip').click()`);
+    await wait(400);
+    const jumped = await inPanel(`({ board: window.__panel.state.boardId, sel: window.__panel.state.selected })`);
+    const pinCopy = store.list('pin', { pinboardId: board.id }).find((p) => p.type === 'url');
+    check('clicking the chip opens the pinboard with the copy selected', jumped.board === board.id && pinCopy && jumped.sel[0] === pinCopy.id, JSON.stringify(jumped));
+    await inPanel(`document.querySelector('.board[data-id="history"]').click()`);
+    await wait(200);
+
     // an edit in progress survives live updates
     await inPanel(`document.querySelector('.board[data-id="${board.id}"]').click()`);
     await wait(300);
@@ -255,6 +274,38 @@ module.exports = async function smoke(ctx) {
     const realCursor = screen.getCursorScreenPoint.bind(screen);
     let fakeCursor = null;
     screen.getCursorScreenPoint = () => fakeCursor || realCursor();
+
+    // dragging a card off the panel: it fades out and lets the drop through (Paste)
+    {
+      await panel.show();
+      await until(() => panel.visible);
+      await wait(400);
+      const pb = panel.win.getBounds();
+      fakeCursor = { x: pb.x + 40, y: pb.y + 40 };
+      panel.beginDragOut();
+      await wait(200);
+      check('panel stays while the drag is still over it', panel.win.getOpacity() === 1 && panel.visible);
+      fakeCursor = { x: pb.x + 40, y: pb.y - 120 };
+      await wait(200);
+      check('panel fades out once the drag leaves it', panel.win.getOpacity() === 0, String(panel.win.getOpacity()));
+      panel.win.emit('blur');
+      check('panel does not close on blur mid-drag', panel.visible && panel.isDraggingOut());
+      monitor.emit('drag', { type: 'drag', active: false });
+      await wait(400);
+      check('drop ends the drag and closes the panel', !panel.visible && !panel.isDraggingOut() && panel.win.getOpacity() === 1);
+      await panel.show();
+      await until(() => panel.visible);
+      await wait(300);
+      fakeCursor = { x: pb.x + 40, y: pb.y + 40 };
+      panel.beginDragOut();
+      await wait(200);
+      panel.endDragOut();
+      check('drop back on the panel keeps it open', panel.visible && panel.win.getOpacity() === 1);
+      panel.hide({ restoreFocus: false });
+      await wait(300);
+      fakeCursor = null;
+    }
+
     setSettings({ shelfCollapseWhenIdle: false });
     check('shelf hidden while empty', !shelf.isVisible());
     monitor.emit('drag', { type: 'drag', active: true, kind: 'files', bypass: false, pid: 999999 });

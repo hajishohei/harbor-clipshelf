@@ -1,6 +1,6 @@
 'use strict';
 const path = require('path');
-const { app, Menu, net, shell, powerMonitor, nativeTheme, systemPreferences } = require('electron');
+const { app, Menu, net, shell, powerMonitor, nativeTheme, systemPreferences, dialog } = require('electron');
 const log = require('./logger');
 const paths = require('./paths');
 const settingsStore = require('./settings');
@@ -30,6 +30,7 @@ const { SettingsWindow, PreviewWindow } = require('./auxWindows');
 const previewContent = require('./previewContent');
 const { ShortcutConflicts } = require('./shortcutConflicts');
 const { restoreFocus } = require('./focusReturn');
+const accessibility = require('./accessibility');
 const { createSounds } = require('./sounds');
 const { broadcast } = require('./windowsCommon');
 const hud = require('./hud');
@@ -67,7 +68,7 @@ function main() {
   const snapper = new WindowSnapper({ windowService, log });
   const shortcuts = new ShortcutManager(log);
   const ops = new ItemOps({ store, getSettings, log });
-  const sounds = createSounds({ hud, getSettings });
+  const sounds = createSounds({ hud, getSettings, log });
   let tray = null;
   let focusFollow = null;
   let screenOcr = null;
@@ -256,16 +257,54 @@ function main() {
     if (prev === current) return;
     setSettings({ lastRunVersion: current }, { silent: true });
     if (!prev) return;
-    const needsAx = isMac && (settings.windowSnapEnabled || settings.focusFollowMouse.enabled || settings.pasteTarget === 'app') &&
-      windowService.accessibilityGranted(false) === false;
+    const needsAx = isMac && (settings.windowSnapEnabled || settings.focusFollowMouse.enabled || settings.pasteTarget === 'app' || settings.accessibilityEverGranted) &&
+      accessibility.trusted() === false;
     setTimeout(() => {
-      if (needsAx) {
-        hud.show(`v${current} にアップデートしました`, 'アクセシビリティの許可を付け直してください（設定に手順があります）', { kind: 'warn', durationMs: 8000 });
-        settingsWindow.show('permissions');
-      } else {
-        hud.show(`v${current} にアップデートしました`, `v${prev} から更新されました`, { durationMs: 5000 });
-      }
+      if (needsAx) offerAccessibilityRepair(current);
+      else hud.show(`v${current} にアップデートしました`, `v${prev} から更新されました`, { durationMs: 5000 });
     }, 1500);
+  }
+
+  // The permission was granted before but this build isn't trusted (an update
+  // of an app without a stable signature): offer the one-click repair once.
+  async function offerAccessibilityRepair(version) {
+    if (settings.accessibilityNoticeVersion === version) return;
+    setSettings({ accessibilityNoticeVersion: version }, { silent: true });
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      message: `v${version} にアップデートしました`,
+      detail: 'アップデートで macOS のアクセシビリティの許可が外れました（システム設定で ON に見えても無効になっています）。\n「許可をやり直す」を押すと古い許可を消して設定画面を開くので、ClipShelf を ON にしてください。直接貼り付け・ウィンドウ整列が使えるようになります。',
+      buttons: ['許可をやり直す', 'あとで'],
+      defaultId: 0,
+      cancelId: 1
+    });
+    if (response === 0) await accessibility.repair({ log });
+  }
+
+  function watchAccessibility() {
+    if (!isMac) return;
+    const onGranted = () => {
+      const patch = {};
+      if (!settings.accessibilityEverGranted) patch.accessibilityEverGranted = true;
+      if (settings.pasteTargetByPrompt && settings.pasteTarget === 'clipboard') {
+        patch.pasteTarget = 'app';
+        patch.pasteTargetByPrompt = false;
+      }
+      if (Object.keys(patch).length) setSettings(patch);
+    };
+    if (accessibility.trusted()) onGranted();
+    else if (settings.accessibilityEverGranted && settings.lastRunVersion === app.getVersion()) {
+      // Same version but no longer trusted (e.g. the entry was removed): offer the repair once.
+      setTimeout(() => offerAccessibilityRepair(app.getVersion()), 4000);
+    }
+    accessibility.watch((now) => {
+      broadcast('system:statusChanged');
+      if (now) {
+        const wasOff = !settings.accessibilityEverGranted || settings.pasteTargetByPrompt;
+        onGranted();
+        if (wasOff) hud.show('アクセシビリティを許可しました', '選んだアイテムをアプリに直接貼り付けられます', { durationMs: 3500 });
+      }
+    });
   }
 
   // ---------------------------------------------------------------- app lifecycle
@@ -497,6 +536,7 @@ function main() {
     updater.cleanup();
     powerMonitor.on('resume', () => updater.onResume());
     noticeVersionChange();
+    watchAccessibility();
 
     const openedAtLogin = (() => {
       if (process.argv.includes('--hidden')) return true;

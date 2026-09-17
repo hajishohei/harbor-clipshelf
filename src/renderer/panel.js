@@ -301,12 +301,36 @@
     p.onclick = () => api.resume();
   }
 
-  function headerColor(item) {
-    if (item.appColor) return item.appColor;
-    if (item.board === 'pin') {
-      const board = state.pinboards.find((b) => b.id === (item.pinboardId || state.info.defaultPinboardId));
-      if (board) return getComputedStyle(document.documentElement).getPropertyValue(`--c-${board.color}`).trim() || '#2f7cf6';
+  // Which pinboard an item lives in: its own board for pins, or the board
+  // holding a pinned copy of the same content for history items.
+  let pinIndexCache = { pins: null, boards: null, map: new Map() };
+  function pinIndex() {
+    if (pinIndexCache.pins === state.pins && pinIndexCache.boards === state.pinboards && pinIndexCache.len === state.pins.length) return pinIndexCache.map;
+    const map = new Map();
+    const def = state.info && state.info.defaultPinboardId;
+    const order = new Map(state.pinboards.map((b, i) => [b.id, i]));
+    const pins = state.pins.slice().sort((a, b) => (order.get(a.pinboardId || def) ?? 99) - (order.get(b.pinboardId || def) ?? 99));
+    for (const p of pins) {
+      for (const h of p.matchHashes || []) if (!map.has(h)) map.set(h, p.pinboardId || def);
     }
+    pinIndexCache = { pins: state.pins, boards: state.pinboards, len: state.pins.length, map };
+    return map;
+  }
+
+  function boardOf(item) {
+    const def = state.info && state.info.defaultPinboardId;
+    const id = item.board === 'pin' ? item.pinboardId || def : item.hash ? pinIndex().get(item.hash) : null;
+    return (id && state.pinboards.find((b) => b.id === id)) || null;
+  }
+
+  function boardColor(board) {
+    return getComputedStyle(document.documentElement).getPropertyValue(`--c-${board.color}`).trim() || '#2f7cf6';
+  }
+
+  function headerColor(item) {
+    const board = boardOf(item);
+    if (board) return boardColor(board);
+    if (item.appColor) return item.appColor;
     return { text: '#5b6472', url: '#2f7cf6', image: '#30a46c', file: '#8e6ad8' }[item.type] || '#6b7280';
   }
 
@@ -355,7 +379,20 @@
         }
       });
     }
-    titles.append(title, el('div', 'sub', timeAgo(item.usedAt || item.createdAt)));
+    const sub = el('div', 'sub', timeAgo(item.usedAt || item.createdAt));
+    const inBoard = boardOf(item);
+    if (inBoard && state.boardId === HISTORY) {
+      const chip = el('button', 'board-chip', inBoard.name);
+      chip.type = 'button';
+      chip.title = `「${inBoard.name}」に保存済み（クリックで開く）`;
+      chip.addEventListener('mousedown', (e) => e.stopPropagation());
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openInBoard(item, inBoard.id);
+      });
+      sub.append(chip);
+    }
+    titles.append(title, sub);
     const app = el('div', 'app');
     if (item.appIcon) {
       const img = el('img');
@@ -446,6 +483,7 @@
     c.addEventListener('dragend', () => {
       c.classList.remove('dragging');
       state.dragIds = null;
+      api.panelDragOut(false);
     });
     if (state.boardId !== HISTORY) {
       c.addEventListener('dragover', (e) => {
@@ -765,6 +803,17 @@
     await api.reorderItems(list.concat(all));
   }
 
+  // Jump to the pinboard that holds this content and select the pinned copy.
+  function openInBoard(item, boardId) {
+    switchBoard(boardId);
+    const pin = listFor(boardId).find((p) => p.id === item.id || (item.hash && (p.matchHashes || []).includes(item.hash)));
+    if (pin) {
+      state.selected = [pin.id];
+      state.anchor = pin.id;
+    }
+    scheduleRender();
+  }
+
   function switchBoard(id) {
     if (state.boardId === id) return;
     state.boardId = id;
@@ -879,6 +928,7 @@
       e.dataTransfer.setData('text/plain', items.map((i) => i.text || '').join('\n'));
       if (items.length === 1 && items[0].type === 'url') e.dataTransfer.setData('text/uri-list', items[0].text);
       e.dataTransfer.effectAllowed = 'copy';
+      api.panelDragOut(true);
       return;
     }
     // Files and images: the OS drag is run by the main process, which can

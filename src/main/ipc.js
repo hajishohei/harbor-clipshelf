@@ -18,7 +18,7 @@ const { DEFAULT_PINBOARD_ID, PINBOARD_COLORS } = require('./store');
 const ID_RE = /^[0-9a-f-]{36}$/;
 const MAX_BYTES_FROM_RENDERER = 64 * 1024 * 1024;
 const SETTABLE = [
-  'syncFolder', 'launchAtLogin', 'showMenuBarIcon', 'soundEffects', 'appearance', 'captureEnabled',
+  'syncFolder', 'launchAtLogin', 'showMenuBarIcon', 'soundEffects', 'copySound', 'pasteSound', 'soundVolume', 'appearance', 'captureEnabled',
   'historyRetention', 'pasteTarget', 'alwaysPlainText', 'plainTextModifier', 'quickPasteModifier',
   'multiPasteSeparator', 'pasteStackOrder', 'recordSourceApp', 'ocrEnabled', 'ignoredApps', 'ignoreTransient',
   'ignoreConfidential', 'linkPreviews', 'showDuringScreenSharing', 'shelfEnabled', 'shelfShowMode', 'shelfPosition',
@@ -556,6 +556,9 @@ function registerIpc(ctx) {
   on('panel:hide', (_e, opts = {}) => panel.hide({ restoreFocus: opts.restoreFocus !== false }));
   on('panel:resize', (_e, height) => panel.resizeTo(Number(height)));
   on('panel:modal', (_e, open) => panel.setRendererModal(!!open));
+  handle('sounds:list', () => sounds.choices());
+  handle('sounds:preview', (_e, value, kind, volume) => sounds.preview(String(value || ''), kind === 'paste' ? 'paste' : 'copy', Number(volume)));
+  on('panel:dragOut', (_e, active) => (active ? panel.beginDragOut() : panel.endDragOut()));
   handle('panel:resetHeight', () => panel.resetHeight());
   handle('panel:open', () => panel.show());
   handle('panel:targetApp', () => panel.targetAppName());
@@ -579,9 +582,11 @@ function registerIpc(ctx) {
       activeShelfDrag = { paths: new Set(files.map((f) => path.resolve(f))) };
     }
     const startedAt = Date.now();
+    if (from === 'panel') panel.beginDragOut();
     ops.dragIcon(list).then((icon) => {
       const iconPng = icon.toPNG();
       const done = (result) => {
+        if (from === 'panel') panel.endDragOut();
         afterDrag(list, from, files, result, startedAt);
         if (from === 'shelf') {
           shelf.ownDragStarted(600);
@@ -800,6 +805,7 @@ function registerIpc(ctx) {
     keepAwake: keepAwake.state(),
     capsLock: monitor.capsOn,
     accessibility: windowService.accessibilityGranted(false),
+    accessibilityEverGranted: !!getSettings().accessibilityEverGranted,
     fullDiskAccess: hasFullDiskAccess(),
     appPath: process.platform === 'darwin' ? (/(.*?\.app)\//.exec(process.execPath) || [])[1] || null : null,
     shortcutConflicts: conflicts ? conflicts.current() : [],
@@ -884,7 +890,12 @@ function registerIpc(ctx) {
     if (!counts.history && !counts.pinned && !counts.duplicates) return { error: 'empty', counts };
     return { counts, found: best.total };
   });
-  handle('system:requestAccessibility', () => windowService.accessibilityGranted(true));
+  // Clears a stale entry left by an older build, then asks macOS again.
+  handle('system:requestAccessibility', async () => {
+    if (windowService.accessibilityGranted(false)) return true;
+    await require('./accessibility').repair({ log });
+    return false;
+  });
   handle('system:openPrivacy', (_e, kind) => {
     windowService.openPrivacyPane(String(kind));
     return true;

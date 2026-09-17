@@ -308,10 +308,48 @@
       app.append(
         row('ログイン時に開く', null, toggle(s.launchAtLogin, (v) => set({ launchAtLogin: v }))),
         row(isMac ? 'メニューバーに表示する' : 'タスクトレイに表示する', 'OFF にしても、アプリをもう一度開けば設定を表示できます', toggle(s.showMenuBarIcon, (v) => set({ showMenuBarIcon: v }))),
-        row('効果音', 'コピーしたとき・貼り付けたときに小さな音を鳴らします', toggle(s.soundEffects, (v) => set({ soundEffects: v }))),
         row('外観モード', null, segmented([['system', 'デフォルト'], ['light', 'ライト'], ['dark', 'ダーク']], s.appearance, (v) => set({ appearance: v })))
       );
       root.append(app);
+
+      const snd = section('効果音', `コピーしたとき・貼り付けたときに鳴らす音です。${isMac ? '初期設定は Mac に入っている標準の効果音です。' : state.info && state.info.platform === 'win32' ? '初期設定は Windows に入っている標準の効果音です。' : ''}`);
+      const choices = (state.soundChoices || []).map((c) => [c.value, c.label]);
+      const soundRow = (label, key, kind) => {
+        const current = s[key];
+        const opts = choices.some(([v]) => v === current) ? choices : [[current, current.replace(/^system:/, '')], ...choices];
+        const pick = select(opts, current, async (v) => {
+          await set({ [key]: v });
+          if (v !== 'none') api.previewSound(v, kind, state.settings.soundVolume);
+        });
+        pick.disabled = !s.soundEffects;
+        const play = button('▶︎ 試聴', () => api.previewSound(state.settings[key], kind, state.settings.soundVolume));
+        play.disabled = !s.soundEffects || current === 'none';
+        play.setAttribute('aria-label', `${label}を試聴`);
+        return row(label, null, pick, play);
+      };
+      const volume = el('input', 'range');
+      volume.type = 'range';
+      volume.min = '0';
+      volume.max = '100';
+      volume.step = '5';
+      volume.value = String(s.soundVolume);
+      volume.disabled = !s.soundEffects;
+      volume.setAttribute('aria-label', '音量');
+      const volLabel = el('span', 'hint', `${s.soundVolume}%`);
+      volume.oninput = () => {
+        volLabel.textContent = `${volume.value}%`;
+      };
+      volume.onchange = async () => {
+        await set({ soundVolume: Number(volume.value) });
+        api.previewSound(state.settings.copySound, 'copy', Number(volume.value));
+      };
+      snd.append(
+        row('効果音を鳴らす', null, toggle(s.soundEffects, (v) => set({ soundEffects: v }))),
+        soundRow('コピーしたとき', 'copySound', 'copy'),
+        soundRow('貼り付けたとき', 'pasteSound', 'paste'),
+        row('音量', null, volume, volLabel)
+      );
+      root.append(snd);
     },
 
     history(root) {
@@ -592,7 +630,12 @@
         }))
       );
       fullDiskRow(sec);
-      sec.append(notice('ok', 'アップデート後に効かなくなったときは、一覧で HarboR ClipShelf を一度「−」で外してから、もう一度追加してください'));
+      if (isMac) {
+        sec.append(row('システム設定で ON なのに使えないとき', 'ClipShelf の古い許可を消して、設定画面を開き直します。開いた一覧で ClipShelf を ON にしてください', button('許可をやり直す', async () => {
+          await api.requestAccessibility();
+          toast('設定画面で ClipShelf を ON にしてください');
+        }, st.accessibility === false ? 'btn primary' : 'btn')));
+      }
       root.append(sec);
     },
 
@@ -875,8 +918,9 @@
   });
 
   (async function init() {
-    const [info, settings] = await Promise.all([api.appInfo(), api.getSettings()]);
+    const [info, settings, soundChoices] = await Promise.all([api.appInfo(), api.getSettings(), api.listSounds().catch(() => [])]);
     state.info = info;
+    state.soundChoices = soundChoices || [];
     state.settings = settings;
     state.section = settings.firstRunCompleted ? 'general' : 'welcome';
     await refresh({ force: true });
