@@ -27,6 +27,9 @@ const { AppIcons } = require('./appIcons');
 const { LinkPreviews } = require('./linkPreview');
 const { PauseController } = require('./pause');
 const { SettingsWindow, PreviewWindow } = require('./auxWindows');
+const previewContent = require('./previewContent');
+const { ShortcutConflicts } = require('./shortcutConflicts');
+const { restoreFocus } = require('./focusReturn');
 const { createSounds } = require('./sounds');
 const { broadcast } = require('./windowsCommon');
 const hud = require('./hud');
@@ -49,6 +52,7 @@ function main() {
   process.on('unhandledRejection', (err) => log.error('[unhandled]', err && err.stack ? err.stack : err));
   if (process.platform === 'win32') app.setAppUserModelId('com.harbor-live.clipshelf');
 
+  previewContent.registerScheme(); // must happen before 'ready'
   let settings = settingsStore.load();
   settingsStore.save(settings); // persist migrations
   const getSettings = () => settings;
@@ -77,6 +81,7 @@ function main() {
   let pause = null;
   let appIcons = null;
   let linkPreviews = null;
+  let conflicts = null;
   let lastWarnAt = 0;
   let capsSeen = false;
 
@@ -136,7 +141,8 @@ function main() {
       for (const action of layouts.ACTIONS) handlers[action] = () => runSnap(action);
     }
     const results = shortcuts.apply(s, handlers);
-    if (settingsWindow) settingsWindow.send('shortcuts:status', shortcuts.status());
+    if (settingsWindow) settingsWindow.send('shortcuts:status', { ...shortcuts.status(), conflicts: conflicts ? conflicts.current() : [] });
+    if (conflicts) conflicts.check();
     return results;
   }
 
@@ -232,7 +238,7 @@ function main() {
     if (changed('appearance')) applyAppearance();
     if (changed('showMenuBarIcon')) applyTray();
     if (changed('showDuringScreenSharing')) panel.applyPrivacy();
-    if (['shelfEnabled', 'shelfPosition', 'shelfSize', 'shelfCustomPosition'].some(changed)) shelf.applySettings();
+    if (['shelfEnabled', 'shelfPosition', 'shelfSize', 'shelfCustomPosition', 'shelfParkSide', 'shelfCollapseWhenIdle', 'shelfFollowActiveDisplay'].some(changed)) shelf.applySettings();
     if (changed('historyRetention')) store.trimHistory(retentionMs());
     if (changed('ocrEnabled') && settings.ocrEnabled) ocr.enqueuePending();
     if (changed('captureEnabled')) pause.syncFromSettings();
@@ -289,7 +295,30 @@ function main() {
     pasteService = new PasteService({ store, watcher, panel, windowService, getSettings, setSettings, sounds, hud, log });
     stack = new PasteStack({ store, watcher, shortcuts, windowService, pasteService, getSettings, setSettings, hud, log });
     settingsWindow = new SettingsWindow({ log });
-    previewWindow = new PreviewWindow({ log, onClosed: (owner) => owner === 'panel' && panel.popModal() });
+    previewWindow = new PreviewWindow({
+      log,
+      onClosed: (owner) => {
+        if (owner === 'panel') panel.popModal();
+        if (owner === 'shelf') shelf.setPreviewOpen(false);
+      },
+      restoreFocus: (to) => {
+        // Space / Esc in the popup: back to the shelf if it had the keyboard, else to the app the user was in.
+        if (to === 'shelf' && shelf.win && !shelf.win.isDestroyed() && shelf.isVisible()) shelf.win.focus();
+        else restoreFocus({ monitor, keepOwnWindowsVisible: true, log });
+      }
+    });
+    previewContent.handleProtocol();
+    conflicts = new ShortcutConflicts({
+      shortcuts,
+      reapply: () => {
+        const r = shortcuts.retryFailed();
+        if (settingsWindow) settingsWindow.send('shortcuts:status', { ...shortcuts.status(), conflicts: conflicts ? conflicts.current() : [] });
+        return r;
+      },
+      hud,
+      log,
+      onChange: (list) => settingsWindow && settingsWindow.send('shortcuts:status', { ...shortcuts.status(), conflicts: list })
+    });
     appIcons = new AppIcons({ windowService, log });
     linkPreviews = new LinkPreviews({ store, getSettings, log });
     focusFollow = new FocusFollow({ windowService, getSettings, setSettings: (p) => setSettings(p), log });
@@ -454,11 +483,12 @@ function main() {
     registerIpc({
       store, watcher, ocr, ops, panel, shelf, stack, pasteService, settingsWindow, previewWindow, getSettings, setSettings,
       shortcuts, applyShortcuts, snapper, keepAwake, windowService, focusFollow, monitor, screenOcr, hud, log, deviceId,
-      updater, appIcons, pause, sounds, broadcast
+      updater, appIcons, pause, sounds, broadcast, conflicts
     });
     screenOcr.registerIpc();
 
     applyShortcuts();
+    setTimeout(() => conflicts.start(), 1500);
     applyLoginItem();
     focusFollow.apply();
     shelf.applySettings();
@@ -484,7 +514,8 @@ function main() {
       // Development-only end-to-end check (scripts/ is not packaged).
       require(process.env.CLIPSHELF_SMOKE_SCRIPT || path.join(__dirname, '..', '..', 'scripts', 'smoke-run.js'))({
         app, store, watcher, ocr, ops, panel, shelf, stack, pasteService, settingsWindow, previewWindow, keepAwake,
-        windowService, snapper, focusFollow, monitor, screenOcr, hud, log, getSettings, setSettings, shortcuts, updater, pause
+        windowService, snapper, focusFollow, monitor, screenOcr, hud, log, getSettings, setSettings, shortcuts, updater, pause,
+        conflicts
       });
     }
     log.info(`HarboR ClipShelf ${app.getVersion()} started (${process.platform}, data: ${store.dataDir}, capture: ${watcher.mode}, accessibility: ${isMac ? systemPreferences.isTrustedAccessibilityClient(false) : 'n/a'})`);
@@ -499,6 +530,7 @@ function main() {
     event.preventDefault();
     const cleanup = (async () => {
       if (updater) updater.stop();
+      if (conflicts) conflicts.stop();
       if (pause) pause.stop();
       if (stack) stack.destroy();
       if (panel) panel.destroy();

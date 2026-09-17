@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('clipshelf', {
   fileStatus: (ids) => invoke('items:fileStatus', ids),
   openItem: (id) => invoke('items:open', id),
   revealItem: (id) => invoke('items:reveal', id),
-  previewItem: (id, from) => invoke('items:preview', id, from),
+  previewItem: (id, from, opts) => invoke('items:preview', id, from, opts || {}),
   runOcr: (id) => invoke('items:ocr', id),
   startDrag: (ids, source) => send('drag:start', ids, source),
   markShelfDrag: () => send('shelf:ownDrag'),
@@ -90,6 +90,9 @@ contextBridge.exposeInMainWorld('clipshelf', {
   setShelfPosition: (position) => invoke('shelf:setPosition', position),
   setShelfSize: (size) => invoke('shelf:setSize', size),
   resetShelfPosition: () => invoke('shelf:resetPosition'),
+  expandShelf: () => send('shelf:expand'),
+  setShelfBusy: (busy) => send('shelf:busy', !!busy),
+  shelfActivity: () => send('shelf:activity'),
   onShelfState: subscribe('shelf:state'),
   onFileStatus: subscribe('shelf:fileStatus'),
   // Electron 32+ no longer exposes File.path; this is the supported way.
@@ -113,6 +116,9 @@ contextBridge.exposeInMainWorld('clipshelf', {
 
   // preview window
   closePreview: () => send('preview:close'),
+  importFromPaste: () => invoke('import:paste'),
+  revealApp: () => invoke('system:revealApp'),
+  quitConflictingApp: (bundleId) => invoke('system:quitConflictingApp', bundleId),
   onPreview: subscribe('preview:show'),
 
   // settings

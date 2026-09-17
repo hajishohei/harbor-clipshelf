@@ -141,7 +141,8 @@
     show();
     const res = state.shortcutResults[key];
     if (!local && state.settings.shortcuts[key] && res && !res.registered && res.reason !== 'empty') {
-      warn.textContent = res.reason === 'duplicate' ? SHORTCUT_ERRORS.duplicate : SHORTCUT_ERRORS['in-use'];
+      const c = (state.conflicts || []).find((x) => x.key === key);
+      warn.textContent = res.reason === 'duplicate' ? SHORTCUT_ERRORS.duplicate : res.reason === 'invalid' ? SHORTCUT_ERRORS.invalid : c && c.app ? `「${c.app.name}」が使用中のため使えません` : SHORTCUT_ERRORS['in-use'];
     }
     btn.onclick = () => startRecording(key, btn, warn, show, local);
     const clear = button('×', () => set({ shortcuts: { [key]: '' } }), 'icon-btn');
@@ -270,7 +271,10 @@
             await api.requestAccessibility();
             await api.openPrivacy('accessibility');
           })));
+        fullDiskRow(sec);
+        sec.append(row('Paste を使っていた方', 'Paste のコピー履歴とピンボードをそのまま取り込めます（Paste 側のデータは消えません）', button('Paste から取り込む', importFromPaste)));
       }
+      conflictNotices(sec, ['togglePanel', 'toggleShelf']);
       root.append(sec);
       const how = section('使い方');
       const k = el('div', 'kbdlist');
@@ -281,7 +285,7 @@
         [`${CMD}1〜9`, 'その番号のアイテムをすぐ貼り付け'],
         ['Space', 'プレビュー'],
         ['文字を入力', '検索（画像の中の文字も対象）'],
-        [accDisplay(s.shortcuts.pasteStack) || '—', 'Paste Stack（コピーした順に連続で貼り付け）'],
+        ...(s.shortcuts.pasteStack ? [[accDisplay(s.shortcuts.pasteStack), 'Paste Stack（コピーした順に連続で貼り付け）']] : []),
         ['ファイルをドラッグ', '画面端にシェルフが出てくるので、そこに置いておけます'],
         [accDisplay(s.shortcuts.toggleShelf) || '—', 'シェルフを表示 / 隠す（2回押しでクリップボードの内容を追加）']
       ];
@@ -324,6 +328,7 @@
           }
         }, 'btn danger'))
       );
+      if (isMac) keep.append(row('Paste から取り込む', 'Paste（wiheads）のコピー履歴とピンボードを取り込みます。何度押しても同じ項目は二重になりません', button('取り込む…', importFromPaste)));
       root.append(keep);
 
       const paste = section('アイテムを貼り付ける', `Return キー・ダブルクリック・${CMD}1〜9 を押したときの動作`);
@@ -337,7 +342,7 @@
       if (!isMac && !(state.status && state.status.windowService.supported)) paste.append(notice('warn', 'このOSでは直接貼り付けできないため、クリップボードへのコピーになります'));
       root.append(paste);
 
-      const stack = section('Paste Stack', `${accDisplay(s.shortcuts.pasteStack) || 'メニュー'} で開いている間、コピーしたものが順番に積まれ、${CMD}V で1つずつ貼り付けます`);
+      const stack = section('Paste Stack', `${s.shortcuts.pasteStack ? accDisplay(s.shortcuts.pasteStack) : 'メニューバーのアイコン'} で開いている間、コピーしたものが順番に積まれ、${CMD}V で1つずつ貼り付けます。${s.shortcuts.pasteStack ? '' : 'ショートカットは初期設定では割り当てていません（ショートカットの設定で追加できます）'}`);
       stack.append(row('新しいアイテムの追加先', null, segmented([['fifo', '下に追加（上から順に貼り付け）'], ['lifo', '上に追加（新しい順に貼り付け）']], s.pasteStackOrder, (v) => set({ pasteStackOrder: v }))));
       root.append(stack);
 
@@ -354,9 +359,10 @@
       const s = state.settings;
       root.append(heading('ショートカット', 'ボタンを押してから、割り当てたいキーを押してください。Delete キーで「なし」にできます。'));
       const paste = section('クリップボード（Paste）');
+      conflictNotices(paste);
       paste.append(
         row('ClipShelf を開く', 'どのアプリからでも使えます', shortcutField('togglePanel')),
-        row('Paste Stack を開く', '「なし」にすると Paste Stack を使いません', shortcutField('pasteStack')),
+        row('Paste Stack を開く', '初期設定は「なし」（⇧⌘C は多くのアプリで使われるため）。割り当てるとそのキーで Paste Stack のウィンドウが開きます', shortcutField('pasteStack')),
         row('次のピンボードを表示', '履歴を開いている間だけ使えます', shortcutField('nextPinboard', { local: true })),
         row('前のピンボードを表示', '履歴を開いている間だけ使えます', shortcutField('prevPinboard', { local: true })),
         row('プレーンテキストモード', 'このキーを押しながら Return / ダブルクリック / Quick Paste すると書式なしで貼り付けます',
@@ -366,7 +372,7 @@
       );
       root.append(paste);
       const shelf = section('シェルフ（Yoink）');
-      shelf.append(row('シェルフを表示 / 隠す', '長押しで直前に消した項目を戻す、2回連続で押すとクリップボードの内容を追加', shortcutField('toggleShelf')));
+      shelf.append(row('シェルフを表示 / 隠す', `長押しで直前に消した項目を戻す、2回連続で押すとクリップボードの内容を追加${isMac && /^F\d+$/.test(s.shortcuts.toggleShelf || '') ? '。MacBook などでは fn キーを押しながら押してください（システム設定 → キーボード →「F1、F2 などのキーを標準のファンクションキーとして使用」を ON にすると fn 不要）' : ''}`, shortcutField('toggleShelf')));
       root.append(shelf);
       const other = section('そのほかの機能');
       other.append(
@@ -433,6 +439,14 @@
       );
       if (s.shelfCustomPosition) place.append(row('動かした位置を元に戻す', null, button('元に戻す', () => api.resetShelfPosition())));
       root.append(place);
+
+      const after = section('置いたあとの動き');
+      after.append(
+        row('使っていないときは画面の端に収納する', 'データを置いてマウスを離すと、シェルフが細いタブになって画面の端へ移動します。タブにマウスを乗せると開き、ドラッグを始めると上の位置に出てきます', toggle(s.shelfCollapseWhenIdle, (v) => set({ shelfCollapseWhenIdle: v }))),
+        row('収納する場所', null, segmented([['right', '画面の右端'], ['left', '画面の左端'], ['same', 'シェルフと同じ側']], s.shelfParkSide, (v) => set({ shelfParkSide: v }))),
+        row('作業中のディスプレイに移動する', 'サブモニターなど別のディスプレイにマウスを動かすと、シェルフもそのディスプレイへ移動します', toggle(s.shelfFollowActiveDisplay, (v) => set({ shelfFollowActiveDisplay: v })))
+      );
+      root.append(after);
     },
 
     shelfAdvanced(root) {
@@ -577,6 +591,7 @@
           refresh();
         }))
       );
+      fullDiskRow(sec);
       sec.append(notice('ok', 'アップデート後に効かなくなったときは、一覧で HarboR ClipShelf を一度「−」で外してから、もう一度追加してください'));
       root.append(sec);
     },
@@ -755,6 +770,7 @@
     if (token !== state.token) return;
     state.status = status;
     state.shortcutResults = shortcutStatus.results;
+    state.conflicts = shortcutStatus.conflicts || [];
     state.keepAwake = keepAwake;
     state.update = update;
     const root = document.createDocumentFragment();
@@ -767,6 +783,72 @@
   }
 
   api.onSettingsSection((id) => go(id));
+  if (api.onShortcutStatus) {
+    api.onShortcutStatus((st) => {
+      if (!st) return;
+      const before = JSON.stringify(state.conflicts || []);
+      state.shortcutResults = st.results || state.shortcutResults;
+      state.conflicts = st.conflicts || [];
+      if (before !== JSON.stringify(state.conflicts)) refresh();
+    });
+  }
+
+  // 「Paste が起動中のため ⇧⌘V が使えません」
+  function conflictNotices(parent, keys) {
+    for (const c of (state.conflicts || []).filter((x) => !keys || keys.includes(x.key))) {
+      const text = c.app
+        ? `「${c.app.name}」が起動中のため、${accDisplay(c.accelerator)} を ClipShelf で使えません。${c.app.name} を終了すると自動で使えるようになります（または別のキーに変更）。`
+        : `${accDisplay(c.accelerator)} は他のアプリが使用中のため、ClipShelf で使えません。そのアプリを終了するか、別のキーに変更してください。`;
+      const controls = c.app && c.app.bundleId
+        ? [button(`${c.app.name} を終了`, async () => {
+          const ok = await api.quitConflictingApp(c.app.bundleId);
+          toast(ok ? `${c.app.name} を終了しました` : `${c.app.name} を終了できませんでした`);
+          refresh({ force: true });
+        })]
+        : [];
+      parent.append(notice('warn', text, ...controls));
+    }
+  }
+
+  // ⌘ フルディスクアクセス（フォルダの確認をまとめて許可）
+  function fullDiskRow(parent) {
+    if (!isMac) return;
+    const st = state.status || {};
+    const granted = st.fullDiskAccess === true;
+    parent.append(row('フォルダへのアクセスをまとめて許可（フルディスクアクセス）',
+      granted
+        ? '許可済みです。デスクトップ・書類・ダウンロード・iCloud Drive・外付けディスクなどの確認はもう出ません'
+        : '「“HarboR ClipShelf”から“デスクトップ”フォルダ内のファイルにアクセスしようとしています」などの確認を、フォルダごとではなく一度で済ませます。開いた画面の「＋」を押して HarboR ClipShelf を追加し、ON にしてください（Finder に表示したアプリをドラッグして追加することもできます）',
+      granted ? el('span', 'hint', '許可済み') : button('許可する', async () => {
+        await api.revealApp();
+        await api.openPrivacy('fullDisk');
+      })));
+  }
+
+  async function importFromPaste() {
+    const r = await api.importFromPaste();
+    if (!r || r.canceled) return;
+    if (r.error === 'permission') {
+      const ok = await api.confirm({
+        message: 'Paste のデータを読むには許可が必要です',
+        detail: '「フルディスクアクセス」で HarboR ClipShelf を ON にしてから、もう一度「Paste から取り込む」を押してください。設定画面を開きますか？',
+        ok: '設定を開く'
+      });
+      if (ok) {
+        await api.revealApp();
+        await api.openPrivacy('fullDisk');
+      }
+      return;
+    }
+    if (r.error === 'not-found') return toast('この Mac に Paste のデータが見つかりませんでした');
+    if (r.error === 'empty') return toast('Paste のデータを読み取れませんでした（ログに詳細を記録しました）');
+    if (r.error === 'mac-only') return toast('Paste からの取り込みは Mac だけで使えます');
+    if (r.error === 'busy') return toast('取り込み中です。しばらくお待ちください');
+    if (r.error === 'failed') return toast('取り込みに失敗しました（ログに詳細を記録しました）');
+    const c = r.counts;
+    toast(`取り込みました：履歴 ${c.history} 件・ピンボード ${c.pinned} 件${c.pinboards ? `（新しいピンボード ${c.pinboards} 個）` : ''}${c.duplicates ? `・取り込み済み ${c.duplicates} 件` : ''}`);
+    refresh({ force: true });
+  }
   api.onSettingsChanged((s) => {
     state.settings = s;
     refresh({ force: true });

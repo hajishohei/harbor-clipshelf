@@ -82,14 +82,16 @@ class ShortcutManager {
         continue;
       }
       let ok = false;
+      let invalid = false;
       try {
         ok = globalShortcut.register(accelerator, this._wrap(key, handler));
       } catch (err) {
+        invalid = true;
         this.log.warn(`[shortcut] invalid accelerator "${accelerator}" for ${key}`, err.message);
       }
       if (ok) seen.set(accelerator, key);
-      else this.log.warn(`[shortcut] "${accelerator}" (${key}) could not be registered`);
-      results[key] = { accelerator, registered: ok, reason: ok ? null : 'in-use' };
+      else if (!invalid) this.log.warn(`[shortcut] "${accelerator}" (${key}) could not be registered`);
+      results[key] = { accelerator, registered: ok, reason: ok ? null : invalid ? 'invalid' : 'in-use' };
     }
     for (const [accelerator, handler] of this.temps) {
       try {
@@ -101,6 +103,29 @@ class ShortcutManager {
     }
     this.results = results;
     return results;
+  }
+
+  // Try again only the shortcuts another app was holding (no unregisterAll,
+  // so the working ones never drop out). → current results
+  retryFailed() {
+    if (this.suspended || !this.lastSettings) return this.results;
+    const taken = new Set(Object.values(this.results).filter((r) => r && r.registered).map((r) => r.accelerator));
+    for (const [key, r] of Object.entries(this.results)) {
+      if (!r || r.registered || r.reason !== 'in-use' || !this.handlers[key]) continue;
+      if (r.accelerator !== this.lastSettings.shortcuts[key] || taken.has(r.accelerator)) continue;
+      let ok = false;
+      try {
+        ok = globalShortcut.register(r.accelerator, this._wrap(key, this.handlers[key]));
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        this.results[key] = { accelerator: r.accelerator, registered: true, reason: null };
+        taken.add(r.accelerator);
+        this.log.info(`[shortcut] "${r.accelerator}" (${key}) is available now`);
+      }
+    }
+    return this.results;
   }
 
   // While the settings screen is recording a new key combination.

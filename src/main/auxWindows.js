@@ -73,66 +73,110 @@ class SettingsWindow {
   }
 }
 
-/** Quick Look-style preview for panel / shelf items (Space). */
+/**
+ * Quick Look-style preview popup for panel / shelf items.
+ * Closes as soon as it loses focus (a click anywhere else), on Space / Esc,
+ * or when the eye button is pressed again.
+ */
 class PreviewWindow {
-  constructor({ log, onClosed }) {
+  constructor({ log, onClosed, restoreFocus }) {
     this.log = log;
     this.onClosed = onClosed;
+    this.restoreFocus = restoreFocus;
     this.win = null;
     this.ready = false;
     this.pending = null;
+    this.owner = null;
+    this.id = null;
+    this.lastClosed = { id: null, at: 0 };
+    this.shownAt = 0;
   }
 
-  show(payload, { owner = null } = {}) {
-    this.owner = owner;
-    let win = this.win;
-    const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-    const width = Math.min(760, area.width - 80);
-    const height = Math.min(560, area.height - 360 > 320 ? area.height - 360 : area.height - 80);
-    const bounds = { x: Math.round(area.x + (area.width - width) / 2), y: Math.round(area.y + 40), width, height };
-    if (!win || win.isDestroyed()) {
-      win = new BrowserWindow({
-        ...bounds,
-        show: false,
-        frame: false,
-        transparent: false,
-        resizable: true,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        skipTaskbar: true,
-        alwaysOnTop: true,
-        title: 'プレビュー',
-        backgroundColor: nativeTheme.shouldUseDarkColors ? '#232428' : '#ffffff',
-        webPreferences: webPreferences()
-      });
-      this.win = win;
-      this.ready = false;
-      win.setAlwaysOnTop(true, 'pop-up-menu', 1);
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      win.loadFile(path.join(RENDERER, 'preview.html'));
-      forwardRendererErrors(win, 'preview', this.log);
-      win.webContents.on('did-finish-load', () => {
-        this.ready = true;
-        if (this.pending) win.webContents.send('preview:show', this.pending);
+  _create(bounds) {
+    const win = new BrowserWindow({
+      ...bounds,
+      show: false,
+      frame: false,
+      transparent: false,
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      hasShadow: true,
+      roundedCorners: true,
+      title: 'プレビュー',
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#232428' : '#ffffff',
+      webPreferences: webPreferences()
+    });
+    this.win = win;
+    this.ready = false;
+    win.setAlwaysOnTop(true, 'pop-up-menu', 1);
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
+    win.loadFile(path.join(RENDERER, 'preview.html'));
+    forwardRendererErrors(win, 'preview', this.log);
+    win.webContents.on('did-finish-load', () => {
+      this.ready = true;
+      if (this.pending) {
+        win.webContents.send('preview:show', this.pending);
         this.pending = null;
-        win.show();
-        win.focus();
-      });
-      win.on('blur', () => this.close());
-      win.on('closed', () => {
-        this.win = null;
-        this.ready = false;
-        if (this.onClosed) this.onClosed(this.owner);
-        this.owner = null;
-      });
-    } else {
+        this._reveal();
+      }
+    });
+    // Clicking anywhere else closes it (like Quick Look / Yoink's popover).
+    win.on('blur', () => {
+      if (Date.now() - this.shownAt < 250) return; // focus settling right after opening
+      this.close({ restore: false });
+    });
+    win.on('closed', () => {
+      const owner = this.owner;
+      this.win = null;
+      this.ready = false;
+      this.owner = null;
+      this.id = null;
+      if (this.onClosed) this.onClosed(owner);
+    });
+    return win;
+  }
+
+  _reveal() {
+    const win = this.win;
+    if (!win || win.isDestroyed()) return;
+    this.shownAt = Date.now();
+    win.show();
+    win.focus();
+    if (isMac) app.focus({ steal: true });
+  }
+
+  // payload: see ipc previewPayload; opts: { owner, id, anchor, side, keepPosition }
+  show(payload, { owner = null, id = null, anchor = null, side = null, keepPosition = false, returnTo } = {}) {
+    if (returnTo) this.returnTo = returnTo;
+    const { sizeFor, placeNear } = require('./previewContent');
+    this.owner = owner;
+    // Switching files inside a stack keeps the item the popup was opened for.
+    if (!keepPosition || !this.id) this.id = id;
+    const point = anchor ? { x: anchor.x + anchor.width / 2, y: anchor.y + anchor.height / 2 } : screen.getCursorScreenPoint();
+    const area = screen.getDisplayNearestPoint(point).workArea;
+    const size = sizeFor(payload.content, area);
+    let bounds = placeNear({ anchor, side, size, area });
+    if (!anchor && owner === 'panel') {
+      // above the Paste bar
+      bounds = { ...bounds, y: Math.max(area.y + 8, Math.min(bounds.y, area.y + area.height - 340 - size.height)) };
+    }
+    let win = this.win;
+    if (!win || win.isDestroyed()) {
+      win = this._create(bounds);
+    } else if (!keepPosition) {
       win.setBounds(bounds);
+    } else {
+      const cur = win.getBounds();
+      win.setBounds({ ...cur, width: bounds.width, height: bounds.height });
     }
     if (this.ready) {
       win.webContents.send('preview:show', payload);
-      win.show();
-      win.focus();
+      this._reveal();
     } else {
       this.pending = payload;
     }
@@ -142,8 +186,18 @@ class PreviewWindow {
     return !!(this.win && !this.win.isDestroyed() && this.win.isVisible());
   }
 
-  close() {
-    if (this.win && !this.win.isDestroyed()) this.win.close();
+  justClosed(id, withinMs = 400) {
+    return this.lastClosed.id === id && Date.now() - this.lastClosed.at < withinMs;
+  }
+
+  close({ restore = false } = {}) {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.lastClosed = { id: this.id, at: Date.now() };
+    const owner = this.owner;
+    this.win.close();
+    // Closed from the keyboard / close button: give focus back to the app
+    // the user was in (a click elsewhere already moved it there).
+    if (restore && owner === 'shelf' && this.restoreFocus) this.restoreFocus(this.returnTo || 'app');
   }
 }
 

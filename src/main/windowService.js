@@ -5,7 +5,9 @@ const platform = require('./platform');
 const MAC_PRIVACY_URLS = {
   accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
   automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
-  screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+  screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  fullDisk: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+  files: 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
 };
 
 /**

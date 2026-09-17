@@ -325,7 +325,8 @@ class ItemStore extends EventEmitter {
     };
   }
 
-  create(partial) {
+  // opts.quiet: no 'changed' event (bulk imports emit one 'reset' at the end)
+  create(partial, opts = {}) {
     const now = Date.now();
     const item = {
       id: crypto.randomUUID(),
@@ -357,7 +358,7 @@ class ItemStore extends EventEmitter {
     if (!Array.isArray(item.tags)) item.tags = [];
     this._set(item);
     this._write(item);
-    this.emit('changed', item, { external: false, created: true });
+    if (!opts.quiet) this.emit('changed', item, { external: false, created: true });
     return item;
   }
 

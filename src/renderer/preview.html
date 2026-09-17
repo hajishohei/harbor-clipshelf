@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; media-src clipshelf-media:; style-src 'self'; script-src 'self'" />
   <title>プレビュー</title>
   <link rel="stylesheet" href="common.css" />
   <link rel="stylesheet" href="preview.css" />
@@ -11,10 +11,12 @@
   <div class="preview">
     <header>
       <div class="titles"><strong id="title"></strong><span id="meta"></span></div>
+      <button class="btn" id="reveal" hidden></button>
       <button class="btn" id="open">開く</button>
-      <button class="icon-btn" id="close" title="閉じる（Space / Esc）"></button>
+      <button class="icon-btn" id="close" title="閉じる（Space / Esc・ほかの場所をクリック）"></button>
     </header>
     <main id="content"></main>
+    <nav class="strip" id="strip" hidden></nav>
   </div>
   <script src="common.js"></script>
   <script src="preview.js"></script>

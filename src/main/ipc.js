@@ -2,10 +2,12 @@
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const { spawn } = require('child_process');
-const { ipcMain, dialog, app, shell, BrowserWindow, Menu, screen } = require('electron');
+const { ipcMain, dialog, app, shell, BrowserWindow, Menu, screen, nativeImage } = require('electron');
 const blobs = require('./blobs');
-const { lite } = require('./itemOps');
+const { lite, isRef } = require('./itemOps');
+const pasteImport = require('./pasteImport');
+const previewContent = require('./previewContent');
+const { hasFullDiskAccess } = require('./fullDiskAccess');
 const { previewOf, isUrl, formatBytes } = require('../shared/text');
 const layouts = require('../shared/layouts');
 const paths = require('./paths');
@@ -21,7 +23,8 @@ const SETTABLE = [
   'multiPasteSeparator', 'pasteStackOrder', 'recordSourceApp', 'ocrEnabled', 'ignoredApps', 'ignoreTransient',
   'ignoreConfidential', 'linkPreviews', 'showDuringScreenSharing', 'shelfEnabled', 'shelfShowMode', 'shelfPosition',
   'shelfSize', 'shelfIgnoredApps', 'shelfFileMode', 'shelfRemoveAfterDragOut', 'shelfStackMultiple',
-  'shelfQuickLookThumbnails', 'shelfResolveAliases', 'shelfFaviconsForWebloc', 'screenOcrEnabled',
+  'shelfQuickLookThumbnails', 'shelfResolveAliases', 'shelfFaviconsForWebloc', 'shelfCollapseWhenIdle',
+  'shelfFollowActiveDisplay', 'shelfParkSide', 'screenOcrEnabled',
   'windowSnapEnabled', 'focusFollowMouse', 'keepAwake', 'shortcuts', 'updateCheckEnabled', 'firstRunCompleted'
 ];
 const PINBOARD_EDITABLE = ['name', 'color'];
@@ -34,13 +37,15 @@ function trustedSender(event) {
 
 const isId = (v) => typeof v === 'string' && ID_RE.test(v);
 const idList = (v) => (Array.isArray(v) ? v : [v]).filter(isId).slice(0, 5000);
+// shelf routes also accept "<id>#<n>" (one file inside a stack)
+const refList = (v) => (Array.isArray(v) ? v : [v]).filter((x) => isId(x) || isRef(x)).slice(0, 5000);
 const TYPE_LABEL = { text: 'テキスト', url: 'リンク', image: '画像', file: 'ファイル' };
 
 function registerIpc(ctx) {
   const {
     store, watcher, ocr, ops, panel, shelf, stack, pasteService, settingsWindow, previewWindow, getSettings, setSettings,
     shortcuts, applyShortcuts, snapper, keepAwake, windowService, focusFollow, monitor, screenOcr, hud, log, deviceId,
-    updater, appIcons, pause, sounds, broadcast
+    updater, appIcons, pause, sounds, broadcast, conflicts
   } = ctx;
 
   store.on('changed', (item) => broadcast('items:changed', lite(item)));
@@ -71,6 +76,9 @@ function registerIpc(ctx) {
     });
   const winOf = (event) => BrowserWindow.fromWebContents(event.sender);
   const items = (ids) => idList(ids).map((id) => store.get(id)).filter(Boolean);
+  // like items(), but stack children become stand-in items
+  const refItems = (ids) => refList(ids).map((id) => ops.virtual(id)).filter(Boolean);
+  const refItem = (id) => ((isId(id) || isRef(id)) && ops.virtual(id)) || null;
 
   function withIcon(item) {
     const out = lite(item);
@@ -161,7 +169,9 @@ function registerIpc(ctx) {
     return lite(store.update(id, safe));
   });
 
-  handle('items:remove', (_e, ids, source) => ops.remove(idList(ids), { source: source === 'shelf' ? 'shelf' : 'panel' }));
+  handle('items:remove', (_e, ids, source) =>
+    source === 'shelf' ? ops.remove(refList(ids), { source: 'shelf' }) : ops.remove(idList(ids), { source: 'panel' })
+  );
   handle('items:undo', () => ops.undoRemove());
   handle('items:eraseHistory', () => {
     const n = ops.remove(store.list('history').map((i) => i.id), { source: 'panel' });
@@ -214,14 +224,14 @@ function registerIpc(ctx) {
     if (n) shelf.show();
     return n;
   });
-  handle('items:thumbnail', (_e, id, size) => (isId(id) ? ops.thumbnail(id, Math.max(64, Math.min(640, Number(size) || 320))) : null));
+  handle('items:thumbnail', (_e, id, size) => (isId(id) || isRef(id) ? ops.thumbnail(id, Math.max(64, Math.min(640, Number(size) || 320))) : null));
   handle('items:fileStatus', (_e, ids) => ops.fileStatus(idList(ids)));
   handle('items:open', (_e, id) => {
-    const item = isId(id) && store.get(id);
+    const item = refItem(id);
     return item ? ops.open(item) : false;
   });
   handle('items:reveal', (_e, id) => {
-    const item = isId(id) && store.get(id);
+    const item = refItem(id);
     return item ? ops.reveal(item) : false;
   });
   handle('items:ocr', (_e, id) => {
@@ -232,51 +242,87 @@ function registerIpc(ctx) {
     return true;
   });
 
-  // Space: Quick Look for files on macOS, our preview window otherwise.
-  handle('items:preview', async (_e, id, from) => {
-    const item = isId(id) && store.get(id);
+  // Space / 目のボタン: a Quick Look-like popup that closes when you click
+  // anywhere else (or press Space / Esc).
+  let previewSeq = 0;
+  handle('items:preview', async (_e, id, from, opts = {}) => {
+    const item = refItem(id);
     if (!item) return false;
-    if (previewWindow.isOpen()) {
+    const owner = from === 'shelf' ? 'shelf' : 'panel';
+    const replace = !!(opts && opts.replace);
+    const seq = ++previewSeq;
+    if (!replace && previewWindow.isOpen()) {
       previewWindow.close();
       return true;
     }
-    const keepPanel = from !== 'shelf';
-    if (process.platform === 'darwin' && item.type === 'file') {
-      const targets = ops.originalPaths(item);
-      const list = targets.length ? targets : ops.dragPaths([item], { source: 'panel' });
-      if (list.length) {
-        if (keepPanel) panel.pushModal();
-        const child = spawn('/usr/bin/qlmanage', ['-p', ...list], { stdio: 'ignore' });
-        child.on('exit', () => keepPanel && panel.popModal());
-        child.on('error', () => keepPanel && panel.popModal());
-        return true;
-      }
-    }
-    if (keepPanel) panel.pushModal();
-    previewWindow.show(await previewPayload(item), { owner: keepPanel ? 'panel' : null });
+    // The click on the eye button itself closed it a moment ago → leave it closed.
+    if (!replace && previewWindow.justClosed(id)) return true;
+    const payload = await previewPayload(item, { owner });
+    // A newer request came in, or the popup was closed while we were reading the file.
+    if (seq !== previewSeq || (replace && !previewWindow.isOpen())) return false;
+    const anchor = owner === 'shelf' ? shelf.bounds() : null;
+    const fresh = !previewWindow.isOpen();
+    if (fresh && owner === 'panel') panel.pushModal();
+    if (owner === 'shelf') shelf.setPreviewOpen(true);
+    const returnTo = fresh ? (owner === 'shelf' && shelf.win && !shelf.win.isDestroyed() && shelf.win.isFocused() ? 'shelf' : 'app') : undefined;
+    previewWindow.show(payload, { owner, id, anchor, side: owner === 'shelf' ? shelf.sideForPreview() : null, keepPosition: replace, returnTo });
     return true;
   });
-  on('preview:close', () => previewWindow.close());
+  on('preview:close', () => previewWindow.close({ restore: true }));
 
-  async function previewPayload(item) {
-    const out = { item: lite(item), html: null, image: null, files: [] };
-    if (item.type === 'text' || item.type === 'url') out.text = item.text;
-    if (item.type === 'image' || (item.type === 'url' && item.linkImage)) out.image = await ops.thumbnail(item.id, 1400);
-    if (item.type === 'file') {
-      out.image = await ops.thumbnail(item.id, 900);
-      out.files = (item.files || []).map((f) => ({ name: f.name, path: f.path, size: formatBytes(f.size), isDir: f.isDir }));
-    }
+  async function previewPayload(item, { owner }) {
+    const out = { item: lite(item), owner, text: null, image: null, content: null, files: [] };
     out.meta = {
       type: TYPE_LABEL[item.type] || item.type,
       app: item.sourceApp || null,
       at: item.usedAt || item.createdAt
     };
+    if (item.type === 'text' || item.type === 'url') {
+      out.text = item.text;
+      out.content = { kind: item.type === 'url' ? 'link' : 'snippet' };
+    }
+    if (item.type === 'image' || (item.type === 'url' && item.linkImage)) {
+      out.image = await ops.thumbnail(item.id, 1600);
+      if (item.type === 'image') {
+        const size = item.imageSize || {};
+        out.content = { kind: 'image', src: out.image, width: size.width, height: size.height };
+      }
+    }
+    if (item.type === 'file') {
+      const files = item.files || [];
+      const paths = files.map((f) => (f.path && fs.existsSync(f.path) ? f.path : null));
+      const staged = ops.dragPaths([item], { source: 'panel' });
+      const firstPath = paths[0] || staged[0] || null;
+      out.content = firstPath ? await previewContent.describeFile(firstPath, { name: files[0] && files[0].name, isDir: files[0] && files[0].isDir }) : { kind: 'missing', name: files[0] && files[0].name };
+      out.files = files.map((f, i) => ({
+        name: f.name,
+        path: f.path,
+        size: formatBytes(f.size),
+        isDir: f.isDir,
+        ref: item.parentId ? null : files.length > 1 ? `${item.id}#${i}` : null
+      }));
+      if (files.length > 1) {
+        out.content.stackCount = files.length;
+        out.stackThumbs = await Promise.all(files.slice(0, 40).map((_f, i) => ops.thumbnail(`${item.id}#${i}`, 160)));
+      }
+      out.title = files.length > 1 ? `${files[0].name} ほか ${files.length - 1} 件` : files[0] && files[0].name;
+    }
     return out;
   }
 
   // ---------------------------------------------------------------- context menus (native)
   handle('menu:item', async (event, ids, where) => {
-    const list = items(ids);
+    if (where === 'shelf') shelf.pushBusy();
+    try {
+      const picked = await itemMenu(event, ids, where);
+      if (where === 'shelf' && !picked) shelf.holdFor(8000); // "共有" opens a system sheet after the menu closes
+      return picked;
+    } finally {
+      if (where === 'shelf') shelf.popBusy();
+    }
+  });
+  async function itemMenu(event, ids, where) {
+    const list = where === 'shelf' ? refItems(ids) : items(ids);
     if (!list.length) return null;
     const first = list[0];
     const s = getSettings();
@@ -285,7 +331,16 @@ function registerIpc(ctx) {
     return new Promise((resolve) => {
       const act = (name, ...args) => () => resolve({ action: name, args });
       let template;
-      if (where === 'shelf') {
+      if (where === 'shelf' && list.some((i) => i.parentId)) {
+        template = [
+          { label: 'クイックルック', click: act('preview'), enabled: single },
+          { label: 'スタックから取り出して削除', click: act('remove') },
+          { type: 'separator' },
+          { label: '開く', click: act('open'), enabled: single },
+          { label: process.platform === 'darwin' ? 'Finder に表示' : 'エクスプローラーで表示', click: act('reveal'), enabled: single },
+          { label: 'ファイルパスをコピー', click: act('copyPaths') }
+        ];
+      } else if (where === 'shelf') {
         const files = first.type === 'file';
         template = [
           { label: 'クイックルック', click: act('preview'), enabled: single },
@@ -343,7 +398,7 @@ function registerIpc(ctx) {
       const menu = Menu.buildFromTemplate(template);
       menu.popup({ window: winOf(event), callback: () => setTimeout(() => resolve(null), 50) });
     });
-  });
+  }
 
   handle('menu:pinboard', async (event, id) => {
     const board = isId(id) && store.get(id);
@@ -405,7 +460,18 @@ function registerIpc(ctx) {
           ]
         },
         { label: 'ウインドウの大きさ', submenu: [size('default', 'デフォルト（3 項目）'), size('auto', '自動調整（3 項目）'), size('autoMin', '自動調整（最小）')] },
+        {
+          label: 'データを置いたあとの移動先',
+          submenu: [
+            { label: '画面の右端', type: 'radio', checked: s.shelfParkSide === 'right', click: act('park', 'right') },
+            { label: '画面の左端', type: 'radio', checked: s.shelfParkSide === 'left', click: act('park', 'left') },
+            { label: 'シェルフと同じ側', type: 'radio', checked: s.shelfParkSide === 'same', click: act('park', 'same') },
+            { type: 'separator' },
+            { label: '使っていないときは端に収納する', type: 'checkbox', checked: s.shelfCollapseWhenIdle, click: act('collapseIdle', !s.shelfCollapseWhenIdle) }
+          ]
+        },
         { type: 'separator' },
+        { label: 'すべて選択', accelerator: 'CommandOrControl+A', registerAccelerator: false, click: act('selectAll') },
         { label: '選択中の項目をスタックにマージ', enabled: Array.isArray(selected) && selected.length > 1, click: act('merge') },
         { label: '最後に削除したファイルを戻す', enabled: ops.recentlyRemoved.length > 0, click: act('restore') },
         { label: 'クリップボードから追加', click: act('addClipboard') },
@@ -502,7 +568,7 @@ function registerIpc(ctx) {
   on('shelf:ownDrag', () => shelf.ownDragStarted(8000));
 
   on('drag:start', (event, ids, source) => {
-    const list = items(ids);
+    const list = source === 'shelf' ? refItems(ids) : items(ids);
     if (!list.length) return;
     const from = source === 'shelf' ? 'shelf' : 'panel';
     const files = ops.dragPaths(list, { source: from });
@@ -586,13 +652,16 @@ function registerIpc(ctx) {
       if (moved) refreshMovedFiles(list);
       return;
     }
-    const removable = list.filter((i) => !i.locked).map((i) => i.id);
-    ops.remove(removable, { source: 'shelf' });
+    const removable = list.filter((i) => !i.locked);
+    ops.remove(removable.filter((i) => !i.parentId).map((i) => i.id), { source: 'shelf' });
+    // files taken out of a stack: find them again by identity (indexes may have shifted meanwhile)
+    const refs = ops.refsForFiles(removable.filter((i) => i.parentId));
+    if (refs.length) ops.remove(refs, { source: 'shelf' });
     if (moved) refreshMovedFiles(list.filter((i) => i.locked));
   }
 
   function refreshMovedFiles(list) {
-    for (const item of list) shelf.send('shelf:fileStatus', ops.fileStatus([item.id]));
+    for (const item of list) shelf.send('shelf:fileStatus', ops.fileStatus([item.parentId || item.id]));
   }
 
   // ---------------------------------------------------------------- shelf
@@ -620,7 +689,13 @@ function registerIpc(ctx) {
   handle('shelf:transfer', async (event, id, move) => {
     const item = isId(id) && store.get(id);
     if (!item || item.type !== 'file') return null;
-    const r = await dialog.showOpenDialog(winOf(event), { title: move ? '移動先を選択' : 'コピー先を選択', properties: ['openDirectory', 'createDirectory'] });
+    shelf.pushBusy();
+    let r;
+    try {
+      r = await dialog.showOpenDialog(winOf(event), { title: move ? '移動先を選択' : 'コピー先を選択', properties: ['openDirectory', 'createDirectory'] });
+    } finally {
+      shelf.popBusy();
+    }
     if (r.canceled || !r.filePaths.length) return null;
     return ops.transfer(item, r.filePaths[0], { move: !!move });
   });
@@ -633,7 +708,10 @@ function registerIpc(ctx) {
       return { error: err.message === 'exists' ? '同じ名前のファイルがあります' : 'このファイルの名前は変更できません' };
     }
   });
-  handle('shelf:copyPaths', (_e, ids) => ops.copyPaths(items(ids)));
+  handle('shelf:copyPaths', (_e, ids) => ops.copyPaths(refItems(ids)));
+  on('shelf:expand', () => shelf.expand({ focus: false }));
+  on('shelf:busy', (_e, busy) => shelf.setBusy(!!busy));
+  on('shelf:activity', () => shelf.markActive());
   handle('shelf:setPosition', (_e, position) => {
     if (settingsStore.ENUMS.shelfPosition.includes(position)) setSettings({ shelfPosition: position, shelfCustomPosition: null });
     shelf.applySettings();
@@ -692,7 +770,8 @@ function registerIpc(ctx) {
     };
   });
 
-  handle('shortcuts:status', () => shortcuts.status());
+  const shortcutStatus = () => ({ ...shortcuts.status(), conflicts: conflicts ? conflicts.current() : [] });
+  handle('shortcuts:status', () => shortcutStatus());
   handle('shortcuts:suspend', () => {
     shortcuts.suspend();
     return true;
@@ -700,7 +779,8 @@ function registerIpc(ctx) {
   handle('shortcuts:resume', () => {
     shortcuts.resume();
     applyShortcuts();
-    return shortcuts.status();
+    if (conflicts) conflicts.check();
+    return shortcutStatus();
   });
   handle('shortcuts:check', (_e, accelerator) => shortcuts.check(String(accelerator || '')));
 
@@ -720,8 +800,90 @@ function registerIpc(ctx) {
     keepAwake: keepAwake.state(),
     capsLock: monitor.capsOn,
     accessibility: windowService.accessibilityGranted(false),
+    fullDiskAccess: hasFullDiskAccess(),
+    appPath: process.platform === 'darwin' ? (/(.*?\.app)\//.exec(process.execPath) || [])[1] || null : null,
+    shortcutConflicts: conflicts ? conflicts.current() : [],
     nativeDrag: nativeDrag.available()
   }));
+  handle('system:revealApp', () => {
+    const m = /(.*?\.app)\//.exec(process.execPath);
+    if (m) shell.showItemInFolder(m[1]);
+    return !!m;
+  });
+  handle('system:quitConflictingApp', (_e, bundleId) => (conflicts ? conflicts.quitApp(String(bundleId || '')) : false));
+
+  // ---------------------------------------------------------------- Paste から取り込む
+  let importing = false;
+  handle('import:paste', async (event) => {
+    if (process.platform !== 'darwin') return { error: 'mac-only' };
+    if (importing) return { error: 'busy' };
+    const found = pasteImport.findStores();
+    if (!found.stores.length) return { error: found.denied ? 'permission' : 'not-found' };
+    let best = null;
+    let denied = found.denied;
+    for (const file of found.stores) {
+      try {
+        const info = pasteImport.inspectStore(file);
+        log.info('[import:paste] store', path.basename(file), JSON.stringify({ total: info.total, pinned: info.pinned, ...info.report }).slice(0, 3000));
+        if (info.total && (!best || info.total > best.total)) best = { file, ...info };
+      } catch (err) {
+        log.warn('[import:paste] could not read', path.basename(file), err.message);
+        if (/EPERM|EACCES|not permitted|authori[sz]ation/i.test(err.message)) denied = true;
+      }
+    }
+    if (!best) return { error: denied ? 'permission' : 'empty' };
+    const s = getSettings();
+    const limited = s.historyRetention !== 'forever';
+    const choice = await dialog.showMessageBox(winOf(event), {
+      type: 'question',
+      buttons: ['取り込む', 'キャンセル'],
+      defaultId: 0,
+      cancelId: 1,
+      message: `Paste の項目が ${best.total} 件見つかりました`,
+      detail: `うちピンボードの項目 ${best.pinned} 件。コピー履歴とピンボードを ClipShelf に取り込みます（Paste 側のデータはそのまま残ります）。同じ項目は二重に取り込みません。件数が多いと数分かかることがあります。`,
+      checkboxLabel: limited ? '保持期間より古い履歴も取り込む（保持期間を「無期限」に変更）' : undefined,
+      checkboxChecked: limited
+    });
+    if (choice.response !== 0) return { canceled: true };
+    if (limited && choice.checkboxChecked) setSettings({ historyRetention: 'forever' });
+    const retention = settingsStore.RETENTION_MS[getSettings().historyRetention];
+    importing = true;
+    hud.show('Paste から取り込んでいます…', `${best.total} 件`, { durationMs: 4000 });
+    let result;
+    try {
+      result = await pasteImport.importStore(best.file, {
+        store,
+        quiet: true,
+        saveBlob: (buf, ext) => blobs.saveBlob(store.settings, buf, ext || '.png'),
+        toPng: (buf) => {
+          const img = nativeImage.createFromBuffer(buf);
+          return img.isEmpty() ? null : img.toPNG();
+        },
+        statFile: (p) => {
+          try {
+            const st = fs.statSync(p);
+            return { name: path.basename(p) || p, size: st.isDirectory() ? null : st.size, isDir: st.isDirectory(), path: p, blob: null };
+          } catch {
+            return null;
+          }
+        },
+        since: retention ? Date.now() - retention : 0
+      });
+    } catch (err) {
+      log.error('[import:paste] failed', err && err.stack ? err.stack : err);
+      return { error: /EPERM|EACCES|not permitted/i.test(String(err && err.message)) ? 'permission' : 'failed' };
+    } finally {
+      importing = false;
+      store.emit('reset');
+    }
+    const { counts, report } = result;
+    log.info('[import:paste] done', JSON.stringify(counts), JSON.stringify({ rows: report.rows, decoded: report.decoded, typeNames: report.typeNames, blobKinds: report.blobKinds, skippedLarge: report.skippedLarge }).slice(0, 3000));
+    if (getSettings().ocrEnabled) {
+      for (const item of store.list('history').filter((i) => i.type === 'image' && i.importKey && !i.ocrText).slice(0, 200)) ocr.enqueue(item.id);
+    }
+    if (!counts.history && !counts.pinned && !counts.duplicates) return { error: 'empty', counts };
+    return { counts, found: best.total };
+  });
   handle('system:requestAccessibility', () => windowService.accessibilityGranted(true));
   handle('system:openPrivacy', (_e, kind) => {
     windowService.openPrivacyPane(String(kind));

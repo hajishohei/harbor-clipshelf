@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { app, nativeImage, shell, clipboard } = require('electron');
 const blobs = require('./blobs');
@@ -7,6 +8,9 @@ const { resolveFilePaths, safeName, prestage, stageText } = require('./fileResol
 const { previewOf, isUrl } = require('../shared/text');
 
 const MAX_COPY_BYTES = 512 * 1024 * 1024; // bigger files are always referenced
+// "<item id>#<file index>" addresses one file inside a shelf stack.
+const REF_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})#(\d{1,5})$/i;
+const isRef = (v) => typeof v === 'string' && REF_RE.test(v);
 
 // Items go to renderers without the heavy rich-text payloads.
 function lite(item) {
@@ -32,6 +36,41 @@ class ItemOps {
 
   get settings() {
     return this.store.settings;
+  }
+
+  // ---------------------------------------------------------------- stack children
+  // → { item, index } for "<id>#<n>", { item, index: null } for a plain id
+  resolveRef(ref) {
+    const m = isRef(ref) ? REF_RE.exec(ref) : null;
+    const item = this.store.get(m ? m[1] : ref);
+    if (!item || item.deleted) return null;
+    if (!m) return { item, index: null };
+    const index = Number(m[2]);
+    if (item.type !== 'file' || !item.files || index >= item.files.length) return null;
+    return { item, index };
+  }
+
+  // Stand-in items (from virtual()) → current "<id>#<n>" refs, matched by file identity.
+  refsForFiles(virtualItems) {
+    const out = [];
+    const same = (a, b) => (a.path && b.path ? a.path === b.path : a.blob && b.blob ? a.blob === b.blob && a.name === b.name : a.name === b.name && a.size === b.size);
+    for (const v of virtualItems) {
+      const parent = this.store.get(v.parentId);
+      const f = v.files && v.files[0];
+      if (!parent || parent.deleted || !f) continue;
+      const i = (parent.files || []).findIndex((x, idx) => same(x, f) && !out.includes(`${parent.id}#${idx}`));
+      if (i >= 0) out.push(`${parent.id}#${i}`);
+    }
+    return out;
+  }
+
+  // A stand-in item for one file of a stack (drag / preview / open / reveal).
+  virtual(ref) {
+    const r = this.resolveRef(ref);
+    if (!r) return null;
+    if (r.index === null) return r.item;
+    const f = r.item.files[r.index];
+    return { ...r.item, id: ref, files: [f], preview: f.name, label: null, parentId: r.item.id, fileIndex: r.index };
   }
 
   // ---------------------------------------------------------------- files
@@ -166,9 +205,29 @@ class ItemOps {
   // ---------------------------------------------------------------- removal / undo
   remove(ids, { source = 'panel' } = {}) {
     const removed = [];
+    const children = new Map(); // parent id → [indexes]
     for (const id of ids) {
+      if (isRef(id)) {
+        const r = this.resolveRef(id);
+        if (r && r.index !== null) children.set(r.item.id, (children.get(r.item.id) || []).concat(r.index));
+        continue;
+      }
       const item = this.store.get(id);
       if (item && this.store.remove(id)) removed.push(item);
+    }
+    for (const [parentId, indexes] of children) {
+      const parent = this.store.get(parentId);
+      if (!parent || parent.deleted || removed.some((x) => x.id === parentId)) continue;
+      const drop = new Set(indexes);
+      const keep = parent.files.filter((_f, i) => !drop.has(i));
+      // Taken out one by one: each comes back as its own item.
+      for (const i of [...drop].sort((a, b) => a - b)) {
+        const f = parent.files[i];
+        const now = Date.now();
+        removed.push({ ...parent, id: crypto.randomUUID(), files: [f], preview: f.name + (f.isDir ? '/' : ''), label: null, createdAt: now, usedAt: now });
+      }
+      if (!keep.length) this.store.remove(parentId);
+      else this.store.update(parentId, { files: keep, preview: keep.length > 1 ? `${keep.length} ファイル` : keep[0].name + (keep[0].isDir ? '/' : ''), label: keep.length > 1 ? parent.label : null });
     }
     if (!removed.length) return 0;
     if (source === 'shelf') {
@@ -262,7 +321,7 @@ class ItemOps {
 
   // ---------------------------------------------------------------- thumbnails
   async thumbnail(id, size = 320) {
-    const item = this.store.get(id);
+    const item = isRef(id) ? this.virtual(id) : this.store.get(id);
     if (!item) return null;
     const key = `${id}:${item.updatedAt}:${size}`;
     if (this.thumbCache.has(key)) return this.thumbCache.get(key);
@@ -399,4 +458,4 @@ class ItemOps {
   }
 }
 
-module.exports = { ItemOps, lite, withoutIdentity };
+module.exports = { ItemOps, lite, withoutIdentity, isRef, REF_RE };

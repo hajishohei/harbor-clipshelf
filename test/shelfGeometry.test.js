@@ -33,3 +33,34 @@ test('custom (dragged) position is used while it is on a screen', () => {
   const off = shelfGeometry({ workArea: area, position: 'left-top', custom: { x: 5000, y: 300 }, allDisplays: [area] });
   assert.equal(off.x, 0, 'falls back when the display is gone');
 });
+
+test('collapsed tab hugs the chosen edge and stays on screen', () => {
+  const { tabGeometry, TAB_WIDTH, TAB_HEIGHT } = require('../src/shared/shelfGeometry');
+  const l = tabGeometry({ workArea: area, side: 'left', centerY: 400 });
+  assert.equal(l.x, 0);
+  assert.equal(l.width, TAB_WIDTH);
+  assert.equal(l.y + TAB_HEIGHT / 2, 400);
+  const r = tabGeometry({ workArea: area, side: 'right', centerY: 10 });
+  assert.equal(r.x, 1440 - TAB_WIDTH);
+  assert.equal(r.y, area.y);
+  const b = tabGeometry({ workArea: area, side: 'right', centerY: 5000 });
+  assert.equal(b.y + b.height, area.y + area.height);
+});
+
+test('side of a shelf rectangle', () => {
+  const { sideOf } = require('../src/shared/shelfGeometry');
+  assert.equal(sideOf({ x: 1300, y: 0, width: 132, height: 300 }, area), 'right');
+  assert.equal(sideOf({ x: 10, y: 0, width: 132, height: 300 }, area), 'left');
+  assert.equal(sideOf(null, area, 'right-top'), 'right');
+});
+
+test('dragged position follows to another display at the same relative place', () => {
+  const { translatePoint, containsPoint } = require('../src/shared/shelfGeometry');
+  const second = { x: 1440, y: 0, width: 1920, height: 1080 };
+  const p = translatePoint({ x: 720, y: 450 }, area, second);
+  assert.ok(containsPoint(second, p));
+  assert.equal(p.x, 1440 + 960);
+  const edge = translatePoint({ x: 1439, y: 890 }, area, second);
+  assert.ok(edge.x <= second.x + second.width - SHELF_WIDTH);
+  assert.ok(containsPoint(second, edge));
+});

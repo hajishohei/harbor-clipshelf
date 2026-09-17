@@ -1,7 +1,7 @@
 {
   "name": "harbor-clipshelf",
   "productName": "HarboR ClipShelf",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "HarboR社内ツール：クリップボード履歴・ピン留め・ドラッグ&ドロップ一時棚（Yoink + Paste）に、画面OCR（TextSniper）・ウィンドウ整列（Magnet）・フォーカス自動切替（AutoRaise）・スリープ防止（Capsomnia）を統合",
   "author": "HarboR",
   "license": "UNLICENSED",
@@ -29,10 +29,12 @@
   "dependencies": {
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/jpn": "^1.0.0",
+    "bplist-parser": "^0.5.0",
     "chokidar": "^5.0.0",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "bplist-creator": "^0.3.0",
     "electron": "^44.0.0",
     "electron-builder": "^26.0.0",
     "node-gyp": "^12.4.0"
@@ -47,6 +49,7 @@
     "files": [
       "src/**/*",
       "assets/**/*",
+      "!assets/artwork/**",
       "package.json",
       "native/prebuilt/**/*",
       "!node_modules/@tesseract.js-data/*/4.0.0/**",

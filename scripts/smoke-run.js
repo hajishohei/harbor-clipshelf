@@ -47,7 +47,7 @@ module.exports = async function smoke(ctx) {
   try {
     await wait(1500);
     check('capture mode', true, watcher.mode);
-    check('settings v3 defaults (passwords recorded)', getSettings().version === 3 && getSettings().ignoreConfidential === false && getSettings().ignoredApps.length === 0);
+    check('settings v4 defaults (passwords recorded, no Paste Stack key)', getSettings().version === 4 && getSettings().ignoreConfidential === false && getSettings().ignoredApps.length === 0 && getSettings().shortcuts.pasteStack === '');
 
     // --- clipboard capture: text
     await clipboard.writeText('スモークテスト テキスト');
@@ -251,6 +251,11 @@ module.exports = async function smoke(ctx) {
     check('Paste Stack closes', !stack.active && !stack.win.isVisible());
 
     // --- Yoink-style shelf
+    const { screen } = require('electron');
+    const realCursor = screen.getCursorScreenPoint.bind(screen);
+    let fakeCursor = null;
+    screen.getCursorScreenPoint = () => fakeCursor || realCursor();
+    setSettings({ shelfCollapseWhenIdle: false });
     check('shelf hidden while empty', !shelf.isVisible());
     monitor.emit('drag', { type: 'drag', active: true, kind: 'files', bypass: false, pid: 999999 });
     await wait(400);
@@ -331,6 +336,216 @@ module.exports = async function smoke(ctx) {
     check('dragging a shelf item back onto the shelf does not duplicate it', dup.length === 0 && store.list('shelf').length === 1);
     await exec(shelf.win, `window.clipshelf.wipeShelf()`);
     await wait(600);
+
+    // --- shelf: tuck into the right edge after a drop, hover opens, drag brings it home
+    {
+      setSettings({ shelfCollapseWhenIdle: true, shelfParkSide: 'right', shelfPosition: 'left-center', shelfCustomPosition: null, shelfShowMode: 'dragStart' });
+      const d = screen.getPrimaryDisplay();
+      const area = d.workArea;
+      const f1 = path.join(out, 'park-1.txt');
+      const f2 = path.join(out, 'park-2.png');
+      const f3 = path.join(out, 'park-3.txt');
+      fs.writeFileSync(f1, 'one');
+      fs.writeFileSync(f2, nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon-256.png')).toPNG());
+      fs.writeFileSync(f3, 'three');
+      fakeCursor = { x: area.x + 40, y: area.y + area.height / 2 }; // over the shelf (left edge)
+      monitor.emit('drag', { type: 'drag', active: true, kind: 'files', bypass: false, pid: 999999 });
+      await wait(300);
+      const stackItems = await exec(shelf.win, `window.clipshelf.addPathsToShelf(${JSON.stringify([f1, f2, f3])})`);
+      monitor.emit('drag', { type: 'drag', active: false });
+      await wait(700);
+      const home = shelf.win.getBounds();
+      check('dropped: shelf is at its home position (left)', shelf.isVisible() && !shelf.isCollapsed() && home.x === area.x, JSON.stringify(home));
+      fakeCursor = { x: area.x + area.width / 2, y: area.y + area.height / 2 }; // mouse moves away
+      const tucked = await until(() => shelf.isCollapsed(), 4000);
+      await wait(500);
+      const tb = shelf.win.getBounds();
+      check('mouse away: shelf tucks into a tab at the right edge', tucked && tb.width < 30 && tb.x + tb.width === area.x + area.width, JSON.stringify(tb));
+      await shot(shelf.win, '08b-shelf-tab');
+      check('tab shows the item count', (await exec(shelf.win, `document.body.classList.contains('collapsed') && document.getElementById('tabCount').textContent`)) === '1');
+      fakeCursor = { x: tb.x + 5, y: tb.y + tb.height / 2 }; // hover the tab
+      const opened = await until(() => !shelf.isCollapsed(), 3000);
+      await wait(500);
+      const pb = shelf.win.getBounds();
+      check('hovering the tab opens the shelf at the right edge', opened && pb.x + pb.width === area.x + area.width && pb.width > 100, JSON.stringify(pb));
+      // pick single files out of the stack
+      const stackId = stackItems[0].id;
+      await exec(shelf.win, `window.__shelf.toggleStack(${JSON.stringify(stackId)})`);
+      await wait(300);
+      const childRows = await exec(shelf.win, `document.querySelectorAll('.tile.child').length`);
+      check('stack opens to show its files', childRows === 3, childRows);
+      await exec(shelf.win, `window.__shelf.selectAll()`);
+      check('select all includes the stack files', (await exec(shelf.win, `window.__shelf.state.selected.length`)) === 4);
+      await shot(shelf.win, '08c-shelf-stack-open');
+      const childThumb = await exec(shelf.win, `window.clipshelf.thumbnail(${JSON.stringify(`${stackId}#1`)}, 96)`);
+      check('stack file has its own thumbnail', typeof childThumb === 'string' && childThumb.startsWith('data:image'));
+      check('one stack file drags on its own', JSON.stringify(ops.dragPaths([ops.virtual(`${stackId}#2`)], { source: 'shelf' })) === JSON.stringify([f3]));
+      await exec(shelf.win, `window.clipshelf.removeItems([${JSON.stringify(`${stackId}#0`)}], 'shelf')`);
+      await wait(200);
+      const left = store.get(stackId);
+      check('taking one file out keeps the rest of the stack', left && left.files.length === 2 && left.files[0].path === f2, left && left.files.map((f) => f.name).join(','));
+      await exec(shelf.win, `window.clipshelf.restoreShelf()`);
+      await wait(200);
+      check('the taken-out file comes back as its own item', store.list('shelf').some((i) => i.files && i.files.length === 1 && i.files[0].path === f1));
+
+      // preview popup next to the shelf
+      await exec(shelf.win, `window.clipshelf.previewItem(${JSON.stringify(stackId)}, 'shelf')`);
+      const popup = await until(() => previewWindow.isOpen() && previewWindow.ready && previewWindow.win, 5000);
+      await wait(600);
+      const ppb = popup && popup.getBounds();
+      check('eye button: preview pops up beside the shelf', !!popup && ppb.x + ppb.width <= pb.x, ppb && JSON.stringify(ppb));
+      const kind = popup && (await exec(popup, `document.body.dataset.kind + '|' + document.querySelectorAll('.strip-item').length`));
+      check('file preview with the stack strip', kind === 'image|2', kind);
+      if (popup) await shot(popup, '08d-preview-popup');
+      check('shelf stays open while the preview is open', !shelf.isCollapsed() && shelf.previewOpen);
+      await exec(popup, `document.querySelectorAll('.strip-item')[1].click()`);
+      await wait(600);
+      const switched = await exec(popup, `document.body.dataset.kind + '|' + document.querySelector('.strip-item.on span').textContent`);
+      check('preview switches to another file of the stack', switched === 'text|park-3.txt' && previewWindow.isOpen(), switched);
+      await shot(popup, '08e-preview-image');
+      // pressing the eye button again: the click first takes focus away (blur), then the button fires
+      previewWindow.win.emit('blur');
+      await exec(shelf.win, `window.clipshelf.previewItem(${JSON.stringify(stackId)}, 'shelf')`);
+      await wait(700);
+      check('eye button again closes it (no reopen)', !previewWindow.isOpen() && !previewWindow.win && !shelf.previewOpen);
+      await exec(shelf.win, `window.clipshelf.previewItem(${JSON.stringify(stackId)}, 'shelf')`);
+      await until(() => previewWindow.isOpen(), 4000);
+      await wait(400);
+      previewWindow.win.emit('blur');
+      await wait(400);
+      check('clicking elsewhere closes the preview', !previewWindow.isOpen() && !shelf.previewOpen);
+      await wait(500);
+
+      // media / folders / other files
+      const pc = require(path.join(__dirname, '..', 'src', 'main', 'previewContent'));
+      const wav = path.join(out, 'tone.wav');
+      const samples = 8000;
+      const buf = Buffer.alloc(44 + samples);
+      buf.write('RIFF', 0); buf.writeUInt32LE(36 + samples, 4); buf.write('WAVEfmt ', 8); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+      buf.writeUInt32LE(8000, 24); buf.writeUInt32LE(8000, 28); buf.writeUInt16LE(1, 32); buf.writeUInt16LE(8, 34); buf.write('data', 36); buf.writeUInt32LE(samples, 40);
+      for (let i = 0; i < samples; i++) buf[44 + i] = 128 + Math.round(60 * Math.sin(i / 4));
+      fs.writeFileSync(wav, buf);
+      const audio = await pc.describeFile(wav);
+      check('audio preview uses the private media URL', audio.kind === 'audio' && audio.src.startsWith('clipshelf-media://preview/'));
+      const audioItem = await exec(shelf.win, `window.clipshelf.addPathsToShelf([${JSON.stringify(wav)}])`);
+      await exec(shelf.win, `window.clipshelf.previewItem(${JSON.stringify(audioItem[0].id)}, 'shelf')`);
+      const ap = await until(() => previewWindow.isOpen() && previewWindow.ready && previewWindow.win, 5000);
+      await wait(800);
+      const { net } = require('electron');
+      const loaded = ap && (await exec(ap, `new Promise((res) => { const a = document.querySelector('audio'); if (!a) return res('no-audio'); const done = () => res(a.readyState + ':' + (a.duration ? a.duration.toFixed(1) : 0)); if (a.readyState >= 1) done(); else { a.addEventListener('loadedmetadata', done); a.addEventListener('error', () => res('error:' + (a.error && a.error.code))); setTimeout(done, 3000); } })`));
+      check('audio loads in the preview popup', !!loaded && /^[1-4]:1\.0$/.test(loaded), loaded);
+      const src = ap && (await exec(ap, `document.querySelector('audio').src`));
+      const res = src && (await net.fetch(src, { headers: { Range: 'bytes=0-11' } }));
+      const head = res && Buffer.from(await res.arrayBuffer()).toString('latin1', 0, 4);
+      check('media streams with range requests', !!res && res.status === 206 && res.headers.get('content-range') === `bytes 0-11/${buf.length}` && head === 'RIFF', res && `${res.status} ${res.headers.get('content-range')} ${head}`);
+      const bogus = await net.fetch('clipshelf-media://preview/0000').then((r) => r.status, () => 'blocked');
+      check('unknown media tokens are refused', bogus === 404 || bogus === 'blocked', bogus);
+      const fetchBlocked = ap && (await exec(ap, `fetch(${JSON.stringify(String(src))}).then(() => 'allowed', () => 'blocked')`));
+      check('page scripts cannot read media files (CSP)', fetchBlocked === 'blocked', fetchBlocked);
+      previewWindow.close();
+      await wait(300);
+      const folder = await pc.describeFile(out, { isDir: true });
+      check('folder preview lists its contents', folder.kind === 'folder' && folder.entries.some((e) => e.name === 'park-1.txt'));
+      const txt = await pc.describeFile(f1);
+      check('text file preview', txt.kind === 'text' && txt.text === 'one');
+
+      // follows the user to another display
+      const fake = { ...d, id: 424242, bounds: { x: area.x + area.width, y: area.y, width: 1000, height: 700 }, workArea: { x: area.x + area.width, y: area.y, width: 1000, height: 700 } };
+      const realNearest = screen.getDisplayNearestPoint.bind(screen);
+      const realAll = screen.getAllDisplays.bind(screen);
+      screen.getDisplayNearestPoint = (pt) => (pt.x >= fake.workArea.x ? fake : realNearest(pt));
+      screen.getAllDisplays = () => realAll().concat(fake);
+      fakeCursor = { x: fake.workArea.x + 500, y: fake.workArea.y + 300 };
+      const moved = await until(() => shelf.displayId === fake.id, 3000);
+      await wait(300);
+      const mb = shelf.win.getBounds();
+      check('shelf moves to the display being used', moved && mb.x >= fake.workArea.x, JSON.stringify(mb));
+      setSettings({ shelfFollowActiveDisplay: false });
+      fakeCursor = { x: area.x + area.width / 2, y: area.y + 200 };
+      await wait(600);
+      check('following can be turned off', shelf.displayId === fake.id);
+      setSettings({ shelfFollowActiveDisplay: true });
+      await until(() => shelf.displayId !== fake.id, 3000);
+      screen.getDisplayNearestPoint = realNearest;
+      screen.getAllDisplays = realAll;
+
+      // a new drag brings it back to the home position
+      fakeCursor = { x: area.x + area.width / 2, y: area.y + 200 };
+      await until(() => shelf.isCollapsed(), 4000);
+      monitor.emit('drag', { type: 'drag', active: true, kind: 'files', bypass: false, pid: 999999 });
+      await wait(400);
+      const hb = shelf.win.getBounds();
+      check('starting a drag opens it at the home position again', !shelf.isCollapsed() && hb.x === area.x && hb.width > 100, JSON.stringify(hb));
+      monitor.emit('drag', { type: 'drag', active: false });
+      await wait(600);
+      setSettings({ shelfParkSide: 'same' });
+      await until(() => shelf.isCollapsed(), 4000);
+      await wait(400);
+      check('park side "same" tucks it at the left edge', shelf.win.getBounds().x === area.x && shelf.win.getBounds().width < 30);
+      // dragged to a custom place near the top: the tab and the opened shelf line up (no open/close loop)
+      setSettings({ shelfParkSide: 'right', shelfCustomPosition: { x: area.x + 300, y: area.y + 10 } });
+      await wait(300);
+      shelf.expand();
+      fakeCursor = { x: area.x + 600, y: area.y + 400 };
+      await until(() => shelf.isCollapsed(), 4000);
+      await wait(500);
+      const tb2 = shelf.win.getBounds();
+      fakeCursor = { x: tb2.x + 4, y: tb2.y + tb2.height / 2 };
+      await until(() => !shelf.isCollapsed(), 3000);
+      await wait(2000);
+      const ob = shelf.win.getBounds();
+      const inside = fakeCursor.x >= ob.x && fakeCursor.x <= ob.x + ob.width && fakeCursor.y >= ob.y && fakeCursor.y <= ob.y + ob.height;
+      check('pointer resting on the tab keeps the shelf open', !shelf.isCollapsed() && inside, JSON.stringify({ tab: tb2, open: ob }));
+      setSettings({ shelfCustomPosition: null, shelfCollapseWhenIdle: false });
+      await wait(300);
+      check('turning collapsing off opens it again', !shelf.isCollapsed());
+      await exec(shelf.win, `window.clipshelf.lockItems(${JSON.stringify(store.list('shelf').map((i) => i.id))}, false)`);
+      await exec(shelf.win, `window.clipshelf.wipeShelf()`);
+      await wait(600);
+      fakeCursor = null;
+    }
+
+    // --- Paste から取り込む (Electron's node:sqlite + the real store)
+    {
+      const imp = require(path.join(__dirname, '..', 'src', 'main', 'pasteImport'));
+      const { DatabaseSync } = require('node:sqlite');
+      const bplistCreate = require('bplist-creator');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-paste-'));
+      const dbFile = path.join(dir, 'Paste.sqlite');
+      const db = new DatabaseSync(dbFile);
+      db.exec(`CREATE TABLE ZITEMENTITY (Z_PK INTEGER PRIMARY KEY, ZTITLE VARCHAR, ZTIMESTAMP TIMESTAMP, ZLIST INTEGER, ZIDENTIFIER VARCHAR, ZDISPLAYORDERINPINBOARD INTEGER);
+        CREATE TABLE ZITEMDATAENTITY (Z_PK INTEGER PRIMARY KEY, ZITEM INTEGER, ZRAWPASTEBOARDITEMS BLOB);
+        CREATE TABLE ZLISTENTITY (Z_PK INTEGER PRIMARY KEY, ZNAME VARCHAR, ZIDENTIFIER VARCHAR);`);
+      db.prepare('INSERT INTO ZLISTENTITY VALUES (1, NULL, ?)').run('H');
+      db.prepare('INSERT INTO ZLISTENTITY VALUES (2, ?, ?)').run('Paste のピンボード', 'P');
+      const ts = (Date.now() - 978307200000) / 1000;
+      db.prepare('INSERT INTO ZITEMENTITY VALUES (1, NULL, ?, 1, ?, NULL)').run(ts - 10, 'x1');
+      db.prepare('INSERT INTO ZITEMDATAENTITY VALUES (1, 1, ?)').run(bplistCreate([{ type: 'public.utf8-plain-text', data: Buffer.from('Paste から来た履歴') }]));
+      db.prepare('INSERT INTO ZITEMENTITY VALUES (2, NULL, ?, 2, ?, 0)').run(ts - 5, 'x2');
+      db.prepare('INSERT INTO ZITEMDATAENTITY VALUES (2, 2, ?)').run(bplistCreate([{ type: 'public.png', data: nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon-256.png')).toPNG() }]));
+      db.close();
+      const info = imp.inspectStore(dbFile);
+      check('Paste store inspection', info.total === 2 && info.pinned === 1, JSON.stringify(info));
+      const { counts } = await imp.importStore(dbFile, {
+        store,
+        quiet: true,
+        saveBlob: (b, ext) => require(path.join(__dirname, '..', 'src', 'main', 'blobs')).saveBlob(store.settings, b, ext || '.png'),
+        statFile: () => null,
+        since: 0
+      });
+      store.emit('reset');
+      await wait(300);
+      check('Paste import (history + pinboard)', counts.history === 1 && counts.pinned === 1 && counts.pinboards === 1, JSON.stringify(counts));
+      const board = store.pinboards().find((b) => b.name === 'Paste のピンボード');
+      const pinnedImage = board && store.list('pin', { pinboardId: board.id }).find((i) => i.type === 'image');
+      check('imported image is readable', !!(pinnedImage && (await ops.thumbnail(pinnedImage.id, 64))));
+      check('imported history appears in the panel list', !!byText('Paste から来た履歴'));
+      const mac = await inPanel(`window.clipshelf.importFromPaste()`);
+      check('import button answers on this OS', process.platform === 'darwin' ? !!mac : mac && mac.error === 'mac-only', JSON.stringify(mac));
+      const st = await inPanel(`window.clipshelf.systemStatus()`);
+      check('status reports folder access and shortcut conflicts', 'fullDiskAccess' in st && Array.isArray(st.shortcutConflicts));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
 
     // --- settings window: every section renders
     const sw = settingsWindow.show('general');
@@ -459,7 +674,8 @@ module.exports = async function smoke(ctx) {
     const probeLog = fs.readFileSync(path.join(app.getPath('userData'), 'logs', 'main.log'), 'utf8');
     check('renderer errors reach the log', probeLog.includes('[renderer:panel] smoke-probe-error'));
     const logText = fs.readFileSync(path.join(app.getPath('userData'), 'logs', 'main.log'), 'utf8');
-    const rendererErrors = logText.split('\n').filter((l) => !l.includes('smoke-probe-error')).filter((l) => l.includes('[renderer:') || l.includes('[ipc]') || l.includes('[uncaught]') || l.includes('[unhandled]'));
+    // the CSP probe above is expected to be refused (and logged)
+    const rendererErrors = logText.split('\n').filter((l) => !l.includes('smoke-probe-error') && !(l.includes('[renderer:preview]') && l.includes('clipshelf-media://') && /Content Security Policy/.test(l))).filter((l) => l.includes('[renderer:') || l.includes('[ipc]') || l.includes('[uncaught]') || l.includes('[unhandled]'));
     check('no renderer / ipc errors', rendererErrors.length === 0, rendererErrors.join(' | '));
   } catch (err) {
     check('smoke run crashed', false, err && err.stack);

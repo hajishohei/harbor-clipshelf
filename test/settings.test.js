@@ -14,7 +14,7 @@ test('normalize fills defaults and clamps values', () => {
   assert.equal(s.keepAwake.enabled, false);
   assert.equal(s.focusFollowMouse.delayMs, 3000);
   assert.ok(s.shortcuts.snapLeftThird);
-  assert.equal(s.version, 3);
+  assert.equal(s.version, 4);
 });
 
 test('fresh settings follow Paste / Yoink defaults and record passwords', () => {
@@ -28,7 +28,18 @@ test('fresh settings follow Paste / Yoink defaults and record passwords', () => 
   assert.equal(s.shelfFileMode, 'reference');
   assert.equal(s.shelfRemoveAfterDragOut, true);
   assert.ok(s.shortcuts.togglePanel.endsWith('+Shift+V'));
-  assert.ok(s.shortcuts.pasteStack.endsWith('+Shift+C'));
+  assert.equal(s.shortcuts.pasteStack, '', 'Paste Stack does not pop up from a shortcut');
+  assert.equal(s.shelfCollapseWhenIdle, true);
+  assert.equal(s.shelfFollowActiveDisplay, true);
+  assert.equal(s.shelfParkSide, 'right');
+});
+
+test('v3 settings: the old Paste Stack default is turned off, custom keys stay', () => {
+  const mod = process.platform === 'darwin' ? 'Command' : 'Control';
+  assert.equal(S.normalize({ version: 3, shortcuts: { pasteStack: `${mod}+Shift+C` } }).shortcuts.pasteStack, '');
+  assert.equal(S.normalize({ version: 3, shortcuts: { pasteStack: 'Control+Alt+P' } }).shortcuts.pasteStack, 'Control+Alt+P');
+  assert.equal(S.normalize({ version: 4, shortcuts: { pasteStack: `${mod}+Shift+C` } }).shortcuts.pasteStack, `${mod}+Shift+C`);
+  assert.equal(S.normalize({ version: 3, shelfParkSide: 'nowhere' }).shelfParkSide, 'right');
 });
 
 test('v1 settings are migrated', () => {

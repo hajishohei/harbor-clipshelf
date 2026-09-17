@@ -11,7 +11,7 @@ const DISPLAY = isMac ? 'Control+Option+Command' : 'Control+Alt+Shift';
 const DEFAULT_SHORTCUTS = {
   // Paste 相当
   togglePanel: `${CMD}+Shift+V`,
-  pasteStack: `${CMD}+Shift+C`,
+  pasteStack: '', // Paste は ⇧⌘C だが、多くのアプリと重なるため初期値はなし（設定で割り当て可）
   nextPinboard: `${CMD}+Right`, // パネル表示中のみ
   prevPinboard: `${CMD}+Left`, // パネル表示中のみ
   // Yoink 相当（Mac は Yoink と同じ F5。Windows の F5 はブラウザの更新なので別キー）
@@ -53,7 +53,8 @@ const ENUMS = {
   shelfShowMode: ['dragStart', 'mouse', 'edge'],
   shelfPosition: ['left-top', 'left-center', 'left-bottom', 'right-top', 'right-center', 'right-bottom'],
   shelfSize: ['default', 'auto', 'autoMin'],
-  shelfFileMode: ['reference', 'copy']
+  shelfFileMode: ['reference', 'copy'],
+  shelfParkSide: ['right', 'left', 'same']
 };
 
 const RETENTION_MS = {
@@ -65,7 +66,7 @@ const RETENTION_MS = {
 };
 
 const DEFAULTS = {
-  version: 3,
+  version: 4,
   firstRunCompleted: false,
   // 同期したい場合だけ、Google Drive / Dropbox / iCloud Drive などの
   // 「常時同期されるローカルフォルダ」を指定する。
@@ -103,6 +104,9 @@ const DEFAULTS = {
   shelfPosition: 'left-center',
   shelfCustomPosition: null, // ウインドウをドラッグで動かした位置 { x, y }
   shelfSize: 'default',
+  shelfCollapseWhenIdle: true, // 使っていないときは画面の端の細いタブに収納
+  shelfFollowActiveDisplay: true, // 作業中のディスプレイへシェルフを移動
+  shelfParkSide: 'right', // データを置いたあとに移動する先（右端 / 左端 / シェルフと同じ側）
   shelfIgnoredApps: [],
   shelfFileMode: 'reference', // Yoink と同じく元ファイルを参照
   shelfRemoveAfterDragOut: true,
@@ -184,6 +188,8 @@ function normalize(parsed) {
     // anything on upgrade (the period can be chosen in the settings).
     if (Object.keys(raw).length && raw.historyRetention === undefined) s.historyRetention = 'forever';
   }
+  // v3 → v4: Paste Stack はショートカットで勝手に出さない（社内の要望）
+  if (from < 4 && rawShortcuts.pasteStack === `${CMD}+Shift+C`) rawShortcuts.pasteStack = '';
   for (const k of ['toggleHistory']) delete rawShortcuts[k];
   s.shortcuts = { ...DEFAULT_SHORTCUTS };
   for (const [k, v] of Object.entries(rawShortcuts)) {
@@ -203,7 +209,8 @@ function normalize(parsed) {
   for (const k of ['launchAtLogin', 'showMenuBarIcon', 'soundEffects', 'captureEnabled', 'alwaysPlainText', 'recordSourceApp',
     'ocrEnabled', 'ignoreTransient', 'ignoreConfidential', 'linkPreviews', 'showDuringScreenSharing', 'shelfEnabled',
     'shelfRemoveAfterDragOut', 'shelfStackMultiple', 'shelfQuickLookThumbnails', 'shelfResolveAliases',
-    'shelfFaviconsForWebloc', 'screenOcrEnabled', 'windowSnapEnabled', 'firstRunCompleted']) {
+    'shelfFaviconsForWebloc', 'shelfCollapseWhenIdle', 'shelfFollowActiveDisplay', 'screenOcrEnabled', 'windowSnapEnabled',
+    'firstRunCompleted']) {
     s[k] = typeof s[k] === 'boolean' ? s[k] : DEFAULTS[k];
   }
   if (!Number.isFinite(s.pausedUntil)) s.pausedUntil = null;
