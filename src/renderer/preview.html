@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+  <title>プレビュー</title>
+  <link rel="stylesheet" href="common.css" />
+  <link rel="stylesheet" href="preview.css" />
+</head>
+<body>
+  <div class="preview">
+    <header>
+      <div class="titles"><strong id="title"></strong><span id="meta"></span></div>
+      <button class="btn" id="open">開く</button>
+      <button class="icon-btn" id="close" title="閉じる（Space / Esc）"></button>
+    </header>
+    <main id="content"></main>
+  </div>
+  <script src="common.js"></script>
+  <script src="preview.js"></script>
+</body>
+</html>

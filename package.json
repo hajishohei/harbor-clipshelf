@@ -1,0 +1,136 @@
+{
+  "name": "harbor-clipshelf",
+  "productName": "HarboR ClipShelf",
+  "version": "1.2.0",
+  "description": "HarboR社内ツール：クリップボード履歴・ピン留め・ドラッグ&ドロップ一時棚（Yoink + Paste）に、画面OCR（TextSniper）・ウィンドウ整列（Magnet）・フォーカス自動切替（AutoRaise）・スリープ防止（Capsomnia）を統合",
+  "author": "HarboR",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hajishohei/harbor-clipshelf.git"
+  },
+  "harbor": {
+    "updateRepo": "hajishohei/harbor-clipshelf"
+  },
+  "main": "src/main/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/run-smoke.js",
+    "build:mac": "(node scripts/build-native.js || echo native drag module skipped) && electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:all": "electron-builder --mac --win --publish never",
+    "release:assets": "node scripts/make-latest-json.js",
+    "icons": "python3 scripts/make_icons.py && python3 scripts/make_icns.py",
+    "build:native": "node scripts/build-native.js"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/jpn": "^1.0.0",
+    "chokidar": "^5.0.0",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.0",
+    "node-gyp": "^12.4.0"
+  },
+  "build": {
+    "appId": "com.harbor-live.clipshelf",
+    "productName": "HarboR ClipShelf",
+    "artifactName": "HarboR-ClipShelf-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "native/prebuilt/**/*",
+      "!node_modules/@tesseract.js-data/*/4.0.0/**",
+      "!node_modules/tesseract.js-core/*.wasm.js"
+    ],
+    "asarUnpack": [
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/bmp-js/**",
+      "node_modules/idb-keyval/**",
+      "node_modules/is-url/**",
+      "node_modules/node-fetch/**",
+      "node_modules/whatwg-url/**",
+      "node_modules/tr46/**",
+      "node_modules/webidl-conversions/**",
+      "node_modules/regenerator-runtime/**",
+      "node_modules/wasm-feature-detect/**",
+      "node_modules/zlibjs/**",
+      "native/prebuilt/**"
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true,
+      "resetAdHocDarwinSignature": true
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "LSUIElement": true,
+        "NSAppleEventsUsageDescription": "ウィンドウ整列・フォーカス自動切替のために、System Events を通じてウィンドウの位置を変更します。",
+        "NSAudioCaptureUsageDescription": "画面から文字を読み取る機能で画面を取得するために使用します（音声は取得しません）。"
+      },
+      "x64ArchFiles": "**/native/prebuilt/darwin-universal/*.node"
+    },
+    "dmg": {
+      "title": "HarboR ClipShelf ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon-1024.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HarboR ClipShelf",
+      "runAfterFinish": true
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "category": "Utility"
+    },
+    "publish": null,
+    "npmRebuild": false
+  }
+}

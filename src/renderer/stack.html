@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+  <title>Paste Stack</title>
+  <link rel="stylesheet" href="common.css" />
+  <link rel="stylesheet" href="stack.css" />
+</head>
+<body>
+  <div class="stack" id="stack">
+    <header>
+      <div class="drag">
+        <strong>Paste Stack</strong>
+        <span id="count"></span>
+      </div>
+      <button class="icon-btn" id="order"></button>
+      <button class="icon-btn" id="close" title="閉じる（Paste Stack を終了）"></button>
+    </header>
+    <ol class="items" id="items"></ol>
+    <div class="empty" id="empty">
+      <strong>コピーしたものがここに積まれます</strong>
+      <span id="hint"></span>
+    </div>
+  </div>
+  <script src="../shared/accelerator.js"></script>
+  <script src="common.js"></script>
+  <script src="stack.js"></script>
+</body>
+</html>

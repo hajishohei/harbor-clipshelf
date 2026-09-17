@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+  <title>Shelf</title>
+  <link rel="stylesheet" href="common.css" />
+  <link rel="stylesheet" href="shelf.css" />
+</head>
+<body>
+  <div class="shelf" id="shelf">
+    <div class="grip" id="grip" title="ドラッグでウインドウを移動"></div>
+    <div class="list" id="list" tabindex="0" aria-label="シェルフ"></div>
+    <div class="dropzone" id="dropzone" hidden></div>
+    <footer class="bar">
+      <button class="icon-btn" id="gear" title="設定・ウインドウの位置など"></button>
+      <span class="count" id="count"></span>
+      <button class="icon-btn" id="wipe" title="全ての項目を消去"></button>
+    </footer>
+  </div>
+  <script src="common.js"></script>
+  <script src="shelf.js"></script>
+</body>
+</html>

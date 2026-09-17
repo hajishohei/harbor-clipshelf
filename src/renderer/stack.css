@@ -1,0 +1,17 @@
+html, body { background: transparent; }
+.stack { position: absolute; inset: 0; display: flex; flex-direction: column; border-radius: 14px; background: var(--glass); backdrop-filter: blur(26px) saturate(1.5); border: 1px solid var(--glass-border); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25); overflow: hidden; }
+header { display: flex; align-items: center; gap: 4px; padding: 8px 8px 6px 12px; }
+header .drag { flex: 1; -webkit-app-region: drag; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+header strong { font-size: 13px; }
+header span { font-size: 11px; color: var(--faint); }
+.items { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 9px; padding: 7px 8px 7px 10px; box-shadow: var(--card-shadow); }
+.row.next { box-shadow: 0 0 0 2px var(--accent), var(--card-shadow); }
+.row .n { font-size: 11px; color: var(--faint); width: 14px; text-align: right; flex-shrink: 0; }
+.row .t { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+.row .icon-btn { width: 22px; height: 22px; opacity: 0; }
+.row:hover .icon-btn { opacity: 1; }
+.row.drop-before { box-shadow: 0 -3px 0 var(--accent), var(--card-shadow); }
+.empty { position: absolute; inset: 44px 12px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; color: var(--muted); font-size: 12px; pointer-events: none; }
+.empty strong { color: var(--text); font-size: 13px; }

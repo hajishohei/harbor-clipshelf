@@ -1,0 +1,8 @@
+node_modules/
+release/
+.DS_Store
+Thumbs.db
+assets/_icns_tmp/
+native/build/
+native/build-*/
+native/prebuilt/
