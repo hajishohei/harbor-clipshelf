@@ -10,6 +10,8 @@
 # Optional settings (Settings → Secrets and variables → Actions):
 #   variable RELEASE_REPO   … 配布物だけを別の公開リポジトリに置く場合 "owner/name"
 #   secret   RELEASE_TOKEN  … RELEASE_REPO に書き込める token（RELEASE_REPO を使う場合のみ）
+#   secret   MAC_SIGNING_CERT … Mac 版に毎回同じ署名をする証明書（"<パスワード>:<p12 の base64>"）。
+#                               これがあるとアップデート後もアクセシビリティ等の許可が外れません。
 name: build
 
 on:
@@ -71,6 +73,22 @@ jobs:
         run: |
           if [ -f native/prebuilt/darwin-universal/clipshelf_native.node ]; then echo "native drag: OK"; else echo "::warning::native drag module missing — shelf drag-out will copy instead of move"; fi
       - run: npx electron-builder --mac --publish never
+        env:
+          MAC_SIGNING_CERT: ${{ secrets.MAC_SIGNING_CERT }}
+      - name: Report signature
+        shell: bash
+        run: |
+          APP="$(ls -d release/mac-universal/*.app | head -1)"
+          codesign -d -r- "$APP" 2>&1 | tee /tmp/dr.txt
+          if grep -q certificate /tmp/dr.txt; then
+            echo "署名: ClipShelf 証明書（アップデート後も許可が保たれます）"
+          elif [ -n "${HAS_CERT}" ]; then
+            echo "::error::MAC_SIGNING_CERT があるのに証明書で署名されていません"; exit 1
+          else
+            echo "::warning::MAC_SIGNING_CERT が未設定のため ad-hoc 署名です（アップデートのたびに Mac の許可が外れます）"
+          fi
+        env:
+          HAS_CERT: ${{ secrets.MAC_SIGNING_CERT != '' && '1' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: mac

@@ -1,0 +1,64 @@
+# Mac の「毎回同じ証明書で署名する」仕組み（scripts/after-sign.js）を、
+# 使い捨ての証明書で試すワークフロー。本物の証明書（secret）は使いません。
+name: sign-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/after-sign.js', 'scripts/make-signing-cert.sh', 'src/main/platform/mac-commands.jxa.js', '.github/workflows/sign-check.yml']
+
+jobs:
+  mac-sign:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Make a throwaway certificate
+        shell: bash
+        run: |
+          bash scripts/make-signing-cert.sh /tmp/testcert
+          echo "MAC_SIGNING_CERT=$(cat /tmp/testcert/MAC_SIGNING_CERT.txt)" >> "$GITHUB_ENV"
+      - name: Build (unpacked) with the certificate
+        run: npx electron-builder --mac --arm64 --dir --publish never
+      - name: Check the signature and launch
+        shell: bash
+        run: |
+          set -e
+          APP="$(ls -d release/mac-arm64/*.app | head -1)"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d -r- "$APP" 2>&1 | tee /tmp/dr1.txt
+          grep -q 'certificate' /tmp/dr1.txt
+          if grep -q 'cdhash' /tmp/dr1.txt; then echo "still ad-hoc"; exit 1; fi
+          # a second build must have the very same requirement (= macOS keeps permissions)
+          rm -rf release
+          npx electron-builder --mac --arm64 --dir --publish never
+          APP="$(ls -d release/mac-arm64/*.app | head -1)"
+          codesign -d -r- "$APP" 2>&1 | grep designated > /tmp/dr2.txt
+          grep designated /tmp/dr1.txt > /tmp/dr1d.txt
+          diff /tmp/dr1d.txt /tmp/dr2.txt
+          open "$APP"
+          sleep 12
+          pgrep -f "$APP/Contents/MacOS/" > /dev/null
+          /usr/bin/afplay -v 0 /System/Library/Sounds/Pop.aiff
+          ls /System/Library/Sounds
+          osascript -e "tell application \"$APP\" to quit" || pkill -f "$APP/Contents/MacOS/" || true
+          echo "OK: signed with a stable certificate and launches"
+      - name: Real app icons through the macOS helper
+        shell: bash
+        run: |
+          set -e
+          echo '{"id":1,"cmd":"appIcon","path":"/System/Applications/Calculator.app","size":64}' \
+            | osascript -l JavaScript src/main/platform/mac-commands.jxa.js > /tmp/icon.jsonl || true
+          node -e '
+            const lines = require("fs").readFileSync("/tmp/icon.jsonl", "utf8").trim().split("\n").map(JSON.parse);
+            const r = lines.find((l) => l.id === 1);
+            if (!r || !r.ok || !r.result) { console.error(JSON.stringify(lines).slice(0, 500)); process.exit(1); }
+            const png = Buffer.from(r.result, "base64");
+            if (png.slice(1, 4).toString() !== "PNG") { console.error("not a PNG"); process.exit(1); }
+            console.log("app icon OK:", png.length, "bytes");
+          '
