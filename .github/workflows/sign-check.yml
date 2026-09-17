@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['scripts/after-sign.js', 'scripts/make-signing-cert.sh', 'src/main/platform/mac-appicon.jxa.js', '.github/workflows/sign-check.yml']
+    paths: ['scripts/after-sign.js', 'scripts/make-signing-cert.sh', 'src/main/macAppIcon.js', 'scripts/mac-icon-probe.js', '.github/workflows/sign-check.yml']
 
 jobs:
   mac-sign:
@@ -48,23 +48,12 @@ jobs:
           ls /System/Library/Sounds
           osascript -e "tell application \"$APP\" to quit" || pkill -f "$APP/Contents/MacOS/" || true
           echo "OK: signed with a stable certificate and launches"
-      - name: Real app icons (separate helper, must finish quickly)
+      - name: Real app icons (in-process, must finish quickly)
         shell: bash
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: |
           set -e
-          for app in /System/Applications/Calculator.app "/Applications/Google Chrome.app" /System/Library/CoreServices/Finder.app; do
-            [ -e "$app" ] || continue
-            start=$(date +%s)
-            perl -e 'alarm shift; exec @ARGV' 20 osascript -l JavaScript -e "$(cat src/main/platform/mac-appicon.jxa.js)" "$app" 64 > /tmp/icon.txt
-            node -e '
-              const b64 = require("fs").readFileSync("/tmp/icon.txt", "utf8").trim();
-              const png = Buffer.from(b64, "base64");
-              if (png.slice(1, 4).toString() !== "PNG") { console.error("not a PNG:", b64.slice(0, 80)); process.exit(1); }
-              console.log("icon OK:", process.argv[1], png.length, "bytes");
-            ' "$app"
-            echo "took $(( $(date +%s) - start ))s"
-          done
+          perl -e 'alarm shift; exec @ARGV' 90 npx electron scripts/mac-icon-probe.js
           # the shared paste/window helper still answers
-          printf '%s\n' '{"id":1,"cmd":"ping"}' | perl -e 'alarm shift; exec @ARGV' 20 osascript -l JavaScript -e "$(cat src/main/platform/mac-commands.jxa.js)" | tee /tmp/ping.txt
+          printf '%s\n' '{"id":1,"cmd":"ping"}' | perl -e 'alarm shift; exec @ARGV' 20 osascript -l JavaScript -e "$(cat src/main/platform/mac-commands.jxa.js)" | tee /tmp/ping.txt || true
           grep -q pong /tmp/ping.txt
