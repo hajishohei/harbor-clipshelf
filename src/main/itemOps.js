@@ -2,8 +2,9 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const { app, nativeImage, shell, clipboard } = require('electron');
+const { nativeImage, shell, clipboard } = require('electron');
 const blobs = require('./blobs');
+const { getFileIcon, largeIcon } = require('./fileIcon');
 const { resolveFilePaths, safeName, prestage, stageText } = require('./fileResolver');
 const { previewOf, isUrl } = require('../shared/text');
 
@@ -354,7 +355,7 @@ class ItemOps {
             img = null;
           }
         }
-        if (!img || img.isEmpty()) img = await app.getFileIcon(p, { size: 'large' });
+        if (!img || img.isEmpty()) img = await (f.isDir ? largeIcon(p, size) : getFileIcon(p, { size: 'large' }));
         return put(img && !img.isEmpty() ? img.toDataURL() : null);
       }
     } catch (err) {

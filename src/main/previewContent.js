@@ -6,7 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
-const { app, nativeImage, protocol } = require('electron');
+const { nativeImage, protocol } = require('electron');
+const { largeIcon } = require('./fileIcon');
 
 const SCHEME = 'clipshelf-media';
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'svg']);
@@ -117,12 +118,8 @@ async function thumbnailOf(p, size) {
 }
 
 async function iconOf(p) {
-  try {
-    const img = await app.getFileIcon(p, { size: 'large' });
-    return img && !img.isEmpty() ? img.toDataURL() : null;
-  } catch {
-    return null;
-  }
+  const img = await largeIcon(p, 128);
+  return img ? img.toDataURL() : null;
 }
 
 function looksBinary(buf) {

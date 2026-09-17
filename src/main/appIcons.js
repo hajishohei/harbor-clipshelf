@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, nativeImage } = require('electron');
+const { getFileIcon } = require('./fileIcon');
 
 /**
  * Source-app icons and their dominant colour, used for the coloured card
@@ -67,8 +68,8 @@ class AppIcons {
       file = null;
     }
     if (!file) return null;
-    const icon = await app.getFileIcon(file, { size: 'normal' });
-    if (!icon || icon.isEmpty()) return null;
+    const icon = await getFileIcon(file, { size: 'normal' });
+    if (!icon) return null;
     const small = icon.resize({ width: 32, height: 32, quality: 'good' });
     return { icon: small.toDataURL(), color: dominantColor(small) };
   }
