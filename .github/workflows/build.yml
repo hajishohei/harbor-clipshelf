@@ -1,0 +1,153 @@
+# Builds the Mac / Windows installers in the cloud and publishes them as a
+# GitHub Release. Installed apps look at the latest Release and show
+# 「新しい版があります」.
+#
+#   新しい版を出す:   package.json の version と CHANGELOG.md を更新して push →
+#                     Actions タブ → build → Run workflow で「公開する」にチェック
+#                     （または タグ vX.Y.Z を push）
+#   試しにビルドだけ: Run workflow（チェックなし）→ 実行結果の Artifacts から取得
+#
+# Optional settings (Settings → Secrets and variables → Actions):
+#   variable RELEASE_REPO   … 配布物だけを別の公開リポジトリに置く場合 "owner/name"
+#   secret   RELEASE_TOKEN  … RELEASE_REPO に書き込める token（RELEASE_REPO を使う場合のみ）
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '公開する（package.json の version で Release を作り、各PCに通知）'
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  UPDATE_REPO: ${{ vars.RELEASE_REPO || github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::タグ ${GITHUB_REF_NAME} と package.json の version ($PKG) が違います"
+            exit 1
+          fi
+
+  mac:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check macOS helper scripts
+        run: node scripts/check-helpers.js
+        continue-on-error: true # CI runners can't grant Accessibility; ping/monitor still verified in the log
+      - name: Build the native drag module (move instead of copy)
+        run: node scripts/build-native.js --arch x64,arm64
+        continue-on-error: true
+      - name: Point the update checker at this repository
+        run: npm pkg set "harbor.updateRepo=${UPDATE_REPO}"
+      - name: Report native module
+        shell: bash
+        run: |
+          if [ -f native/prebuilt/darwin-universal/clipshelf_native.node ]; then echo "native drag: OK"; else echo "::warning::native drag module missing — shelf drag-out will copy instead of move"; fi
+      - run: npx electron-builder --mac --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            release/*.dmg
+            release/*-mac-*.zip
+          if-no-files-found: error
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check Windows helper scripts
+        run: node scripts/check-helpers.js
+        continue-on-error: true # a CI desktop may have no foreground window; failures are still visible in the log
+      - name: Build the native drag module (move instead of copy)
+        run: node scripts/build-native.js --arch x64,arm64
+        continue-on-error: true
+      - name: Point the update checker at this repository
+        shell: bash
+        run: npm pkg set "harbor.updateRepo=${UPDATE_REPO}"
+      - name: Report native module
+        shell: bash
+        run: |
+          for a in x64 arm64; do
+            if [ -f "native/prebuilt/win32-$a/clipshelf_native.node" ]; then echo "native drag $a: OK"; else echo "::warning::native drag module ($a) missing — shelf drag-out will copy instead of move"; fi
+          done
+      - run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          # per-architecture installers only (the combined one is twice the size)
+          path: |
+            release/*-win-x64.exe
+            release/*-win-arm64.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Decide the tag
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then TAG="${GITHUB_REF_NAME}"; else TAG="v$(node -p "require('./package.json').version")"; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          DRAFT="$(gh release view "$TAG" --repo "$UPDATE_REPO" --json isDraft -q .isDraft 2>/dev/null || echo none)"
+          if [ "$DRAFT" = "true" ]; then
+            echo "前回途中で止まった下書き $TAG を作り直します"
+            gh release delete "$TAG" --repo "$UPDATE_REPO" --yes
+          elif [ "$DRAFT" = "false" ]; then
+            echo "::error::$TAG は公開済みです。package.json の version を上げてから実行してください"
+            exit 1
+          fi
+      - name: Write latest.json / SHA256SUMS.txt
+        run: node scripts/make-latest-json.js --dir dist --repo "$UPDATE_REPO" --tag "$TAG" --changelog CHANGELOG.md
+      - name: Publish GitHub Release
+        run: |
+          set -e
+          if [ "$UPDATE_REPO" = "$GITHUB_REPOSITORY" ]; then TARGET="--target $GITHUB_SHA"; else TARGET=""; fi
+          # Create as a draft, upload everything, then publish, so apps never
+          # see a half-uploaded release.
+          gh release create "$TAG" --repo "$UPDATE_REPO" $TARGET --draft \
+            --title "HarboR ClipShelf $TAG" --notes-file dist/RELEASE_NOTES.md
+          gh release upload "$TAG" --repo "$UPDATE_REPO" --clobber \
+            dist/*.dmg dist/*.zip dist/*.exe dist/latest.json dist/SHA256SUMS.txt
+          gh release edit "$TAG" --repo "$UPDATE_REPO" --draft=false --latest

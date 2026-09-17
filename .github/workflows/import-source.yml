@@ -1,0 +1,52 @@
+# ソース一式を GitHub の画面からアップロードするための補助ワークフロー。
+# リポジトリ直下に source.zip（harbor-clipshelf/ フォルダを zip したもの）を
+# アップロードすると、中身を展開してコミットし、build ワークフローを
+# 「公開する」付きで起動します。
+# （.github/workflows の中身は安全のため展開しません。変更する場合は画面から直接更新してください）
+name: import-source
+
+on:
+  push:
+    branches: [main]
+    paths: ['source.zip']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '展開後に build を「公開する」付きで実行する'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack source.zip
+        id: unpack
+        run: |
+          set -e
+          if [ ! -f source.zip ]; then echo "source.zip がありません"; echo "done=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          mkdir -p /tmp/src
+          unzip -q source.zip -d /tmp/src
+          ROOT=/tmp/src/harbor-clipshelf
+          [ -d "$ROOT" ] || ROOT=/tmp/src
+          test -f "$ROOT/package.json"
+          rsync -a --exclude '.git/' --exclude '.github/workflows/' "$ROOT/" ./
+          git rm -q --cached source.zip
+          rm -f source.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898281+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          VERSION="$(node -p "require('./package.json').version")"
+          git commit -q -m "Import HarboR ClipShelf v${VERSION} source"
+          git push
+          echo "done=true" >> "$GITHUB_OUTPUT"
+      - name: Start the build
+        if: steps.unpack.outputs.done == 'true' && (github.event_name == 'push' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref main -f publish=true
