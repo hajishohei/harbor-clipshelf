@@ -134,20 +134,6 @@ class WindowService {
     return this._request('appPath', { bundleId: bundleId || '', pid: Number(pid) || 0 }, { timeoutMs: 3000 });
   }
 
-  // macOS: the app's real icon (PNG, base64), from a separate short-lived
-  // osascript so it can't hold up the paste / window helper.
-  appIcon({ path: p, size = 64 }) {
-    if (!platform.isMac || !p) return Promise.resolve(null);
-    const script = platform.readScript('mac-appicon.jxa.js'); // inside app.asar: pass the text, not the path
-    return new Promise((resolve) => {
-      require('child_process').execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script, String(p), String(size)],
-        { timeout: 6000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-          const b64 = String(stdout || '').trim();
-          resolve(!err && /^[A-Za-z0-9+/=]{64,}$/.test(b64) ? b64 : null);
-        });
-    });
-  }
-
   async activate(hwnd) {
     if (!platform.isWin || !hwnd) return false;
     return this._request('activate', { hwnd: String(hwnd) }, { timeoutMs: 3000 });

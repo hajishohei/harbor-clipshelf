@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { app, nativeImage } = require('electron');
 const { getFileIcon } = require('./fileIcon');
+const { appIconImage } = require('./macAppIcon');
 
 /**
  * Source-app icons and their dominant colour, used for the coloured card
@@ -73,12 +74,11 @@ class AppIcons {
     let icon = null;
     if (process.platform === 'darwin') {
       try {
-        const b64 = await this.ws.appIcon({ path: file, size: 64 });
-        if (b64) icon = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'));
+        const found = await appIconImage(file, 64);
+        icon = found ? found.image : null;
       } catch (err) {
-        this.log.warn('[icons] native icon failed', err && err.message);
+        this.log.warn('[icons] app icon failed', err && err.message);
       }
-      if (icon && icon.isEmpty()) icon = null;
     } else {
       icon = await getFileIcon(file, { size: 'large' });
     }
