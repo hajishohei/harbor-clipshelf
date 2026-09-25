@@ -118,6 +118,13 @@ class TrayMenu {
           { label: 'OFFにする', enabled: ka.active, click: () => h.keepAwake(false) }
         ]
       },
+      {
+        label: st.mouse && st.mouse.paused ? 'マウス操作: 一時停止中 — 再開' : 'マウス操作を一時停止',
+        visible: !!(st.mouse && st.mouse.enabled && st.mouse.supported),
+        accelerator: acc('toggleMouse').accelerator,
+        registerAccelerator: false,
+        click: () => h.toggleMouse()
+      },
       { type: 'separator' },
       { label: '設定…', accelerator: 'CommandOrControl+,', registerAccelerator: false, click: () => h.openSettings() },
       { label: up.status === 'checking' ? 'アップデートを確認中…' : 'アップデートを確認…', enabled: !['checking', 'downloading', 'installing'].includes(up.status), click: () => h.checkUpdate() },

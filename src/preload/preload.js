@@ -155,6 +155,11 @@ contextBridge.exposeInMainWorld('clipshelf', {
   triggerScreenOcr: () => invoke('screenOcr:trigger'),
   primeScreenPermission: () => invoke('screenOcr:primePermission'),
   testHud: () => invoke('hud:test'),
+  mouseStatus: () => invoke('mouse:status'),
+  mouseObserve: (on) => invoke('mouse:observe', on),
+  mouseTogglePause: () => invoke('mouse:togglePause'),
+  mouseTest: (action) => invoke('mouse:test', action),
+  mouseChooseApp: () => invoke('mouse:chooseApp'),
 
   // updates
   updateState: () => invoke('update:state'),
@@ -177,5 +182,7 @@ contextBridge.exposeInMainWorld('clipshelf', {
   onKeepAwakeChanged: subscribe('keepAwake:changed'),
   onHud: subscribe('hud:show'),
   onSound: subscribe('hud:sound'),
-  onUpdateState: subscribe('update:state')
+  onUpdateState: subscribe('update:state'),
+  onMousePress: subscribe('mouse:press'),
+  onMouseTrigger: subscribe('mouse:trigger')
 });

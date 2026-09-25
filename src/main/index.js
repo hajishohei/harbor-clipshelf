@@ -14,6 +14,7 @@ const { WindowService } = require('./windowService');
 const { WindowSnapper, REASON_TEXT } = require('./windowSnap');
 const { FocusFollow } = require('./focusFollow');
 const { KeepAwake } = require('./keepAwake');
+const { MouseControl } = require('./mouseControl');
 const { ScreenOcr } = require('./screenOcr');
 const { registerIpc } = require('./ipc');
 const { Updater } = require('./updater');
@@ -71,6 +72,7 @@ function main() {
   const sounds = createSounds({ hud, getSettings, log });
   let tray = null;
   let focusFollow = null;
+  let mouse = null;
   let screenOcr = null;
   let updater = null;
   let panel = null;
@@ -138,6 +140,7 @@ function main() {
     };
     if (s.screenOcrEnabled) handlers.screenOcr = () => screenOcr.trigger();
     if (s.keepAwake.enabled) handlers.toggleKeepAwake = () => keepAwake.toggle();
+    if (s.mouse.enabled) handlers.toggleMouse = () => mouse.togglePause();
     if (s.windowSnapEnabled) {
       for (const action of layouts.ACTIONS) handlers[action] = () => runSnap(action);
     }
@@ -213,7 +216,11 @@ function main() {
     const changed = (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]);
 
     if (changed('syncFolder')) switchDataDir('settings');
-    if (changed('shortcuts') || changed('screenOcrEnabled') || changed('windowSnapEnabled') || changed('keepAwake')) applyShortcuts();
+    if (changed('shortcuts') || changed('screenOcrEnabled') || changed('windowSnapEnabled') || changed('keepAwake') || changed('mouse')) applyShortcuts();
+    if (changed('mouse')) {
+      mouse.apply();
+      if (settings.mouse.enabled && !prev.mouse.enabled && isMac) windowService.accessibilityGranted(true);
+    }
     if (changed('focusFollowMouse')) {
       focusFollow.apply();
       if (settings.focusFollowMouse.enabled && !prev.focusFollowMouse.enabled && isMac) {
@@ -257,7 +264,7 @@ function main() {
     if (prev === current) return;
     setSettings({ lastRunVersion: current }, { silent: true });
     if (!prev) return;
-    const needsAx = isMac && (settings.windowSnapEnabled || settings.focusFollowMouse.enabled || settings.pasteTarget === 'app' || settings.accessibilityEverGranted) &&
+    const needsAx = isMac && (settings.windowSnapEnabled || settings.focusFollowMouse.enabled || settings.mouse.enabled || settings.pasteTarget === 'app' || settings.accessibilityEverGranted) &&
       accessibility.trusted() === false;
     setTimeout(() => {
       if (needsAx) offerAccessibilityRepair(current);
@@ -299,6 +306,10 @@ function main() {
     }
     accessibility.watch((now) => {
       broadcast('system:statusChanged');
+      if (mouse) {
+        if (now) mouse.apply();
+        else mouse.onPermissionLost(); // the tap stops receiving anyway; start again once allowed
+      }
       if (now) {
         const wasOff = !settings.accessibilityEverGranted || settings.pasteTargetByPrompt;
         onGranted();
@@ -361,6 +372,25 @@ function main() {
     appIcons = new AppIcons({ windowService, log });
     linkPreviews = new LinkPreviews({ store, getSettings, log });
     focusFollow = new FocusFollow({ windowService, getSettings, setSettings: (p) => setSettings(p), log });
+    mouse = new MouseControl({
+      getSettings,
+      hud,
+      log,
+      features: {
+        openHistory: () => panel.toggle(),
+        toggleShelf: () => shelf.toggle(),
+        screenOcr: () => {
+          if (settings.screenOcrEnabled) return screenOcr.trigger();
+          warn('画面から文字を読み取る がOFFです', '設定 → 画面から文字を読み取る でONにしてください');
+          return false;
+        },
+        toggleKeepAwake: () => keepAwake.toggle(),
+        snap: (layout) => runSnap(layout)
+      }
+    });
+    mouse.on('press', (ev) => settingsWindow && settingsWindow.send('mouse:press', ev));
+    mouse.on('trigger', (ev) => settingsWindow && settingsWindow.send('mouse:trigger', ev));
+    mouse.on('change', () => tray && tray.refresh());
     screenOcr = new ScreenOcr({ ocr, store, watcher, monitor, hud, windowService, getSettings, log });
     updater = new Updater({
       getSettings,
@@ -473,6 +503,7 @@ function main() {
         shortcuts: settings.shortcuts,
         screenOcrEnabled: settings.screenOcrEnabled,
         keepAwakeEnabled: settings.keepAwake.enabled,
+        mouse: mouse ? mouse.status() : null,
         keepAwake: keepAwake.state(),
         update: updater.state(),
         pause: pause.state(),
@@ -501,6 +532,8 @@ function main() {
         },
         screenOcr: () => (settings.screenOcrEnabled ? screenOcr.trigger() : settingsWindow.show('screenOcr')),
         keepAwake: (on, durationMs) => (on ? keepAwake.start({ durationMs }) : keepAwake.stop()),
+        toggleMouse: () => mouse.togglePause(),
+        mouseSettings: () => settingsWindow.show('mouse'),
         installUpdate: () => updater.install(),
         checkUpdate: async () => {
           const st = await updater.check({ manual: true });
@@ -522,7 +555,7 @@ function main() {
     registerIpc({
       store, watcher, ocr, ops, panel, shelf, stack, pasteService, settingsWindow, previewWindow, getSettings, setSettings,
       shortcuts, applyShortcuts, snapper, keepAwake, windowService, focusFollow, monitor, screenOcr, hud, log, deviceId,
-      updater, appIcons, pause, sounds, broadcast, conflicts
+      updater, appIcons, pause, sounds, broadcast, conflicts, mouse
     });
     screenOcr.registerIpc();
 
@@ -530,6 +563,7 @@ function main() {
     setTimeout(() => conflicts.start(), 1500);
     applyLoginItem();
     focusFollow.apply();
+    mouse.apply();
     shelf.applySettings();
     hud.ensure();
     updater.start();
@@ -576,6 +610,7 @@ function main() {
       if (panel) panel.destroy();
       if (shelf) shelf.destroy();
       if (focusFollow) await focusFollow.restoreForQuit();
+      if (mouse) mouse.stop();
       shortcuts.dispose();
       watcher.stop();
       monitor.stop();

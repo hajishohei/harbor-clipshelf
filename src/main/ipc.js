@@ -25,7 +25,7 @@ const SETTABLE = [
   'shelfSize', 'shelfIgnoredApps', 'shelfFileMode', 'shelfRemoveAfterDragOut', 'shelfStackMultiple',
   'shelfQuickLookThumbnails', 'shelfResolveAliases', 'shelfFaviconsForWebloc', 'shelfCollapseWhenIdle',
   'shelfFollowActiveDisplay', 'shelfParkSide', 'screenOcrEnabled',
-  'windowSnapEnabled', 'focusFollowMouse', 'keepAwake', 'shortcuts', 'updateCheckEnabled', 'firstRunCompleted'
+  'windowSnapEnabled', 'focusFollowMouse', 'keepAwake', 'mouse', 'shortcuts', 'updateCheckEnabled', 'firstRunCompleted'
 ];
 const PINBOARD_EDITABLE = ['name', 'color'];
 
@@ -45,7 +45,7 @@ function registerIpc(ctx) {
   const {
     store, watcher, ocr, ops, panel, shelf, stack, pasteService, settingsWindow, previewWindow, getSettings, setSettings,
     shortcuts, applyShortcuts, snapper, keepAwake, windowService, focusFollow, monitor, screenOcr, hud, log, deviceId,
-    updater, appIcons, pause, sounds, broadcast, conflicts
+    updater, appIcons, pause, sounds, broadcast, conflicts, mouse
   } = ctx;
 
   store.on('changed', (item) => broadcast('items:changed', lite(item)));
@@ -103,6 +103,7 @@ function registerIpc(ctx) {
     defaults: settingsStore.DEFAULT_SHORTCUTS,
     localShortcuts: settingsStore.LOCAL_SHORTCUTS,
     snapActions: layouts.ACTIONS,
+    mouseDefaults: settingsStore.DEFAULTS.mouse,
     snapLabels: layouts.LABELS,
     nativeDrag: nativeDrag.available(),
     pinboardColors: PINBOARD_COLORS,
@@ -809,7 +810,8 @@ function registerIpc(ctx) {
     fullDiskAccess: hasFullDiskAccess(),
     appPath: process.platform === 'darwin' ? (/(.*?\.app)\//.exec(process.execPath) || [])[1] || null : null,
     shortcutConflicts: conflicts ? conflicts.current() : [],
-    nativeDrag: nativeDrag.available()
+    nativeDrag: nativeDrag.available(),
+    mouse: mouse.status()
   }));
   handle('system:revealApp', () => {
     const m = /(.*?\.app)\//.exec(process.execPath);
@@ -917,6 +919,31 @@ function registerIpc(ctx) {
     if (!layouts.ACTIONS.includes(action)) return { ok: false, reason: 'unknown-action' };
     await new Promise((r) => setTimeout(r, 1500));
     return snapper.apply(action);
+  });
+
+  // ---------------------------------------------------------------- マウス操作
+  handle('mouse:status', () => mouse.status());
+  handle('mouse:observe', (_e, on) => {
+    mouse.setObserve(!!on);
+    return true;
+  });
+  handle('mouse:togglePause', () => mouse.togglePause());
+  handle('mouse:test', async (_e, action) => {
+    // leave time to look away from the settings window (desktop switches etc.)
+    await new Promise((r) => setTimeout(r, 800));
+    return mouse.run(action);
+  });
+  handle('mouse:chooseApp', async (event) => {
+    const r = await dialog.showOpenDialog(winOf(event), {
+      title: 'アプリケーションを選択',
+      defaultPath: process.platform === 'darwin' ? '/Applications' : process.env.ProgramFiles,
+      properties: ['openFile'],
+      filters: process.platform === 'win32' ? [{ name: 'アプリ', extensions: ['exe'] }] : [{ name: 'アプリ', extensions: ['app'] }]
+    });
+    if (r.canceled || !r.filePaths.length) return null;
+    const { appIdentity } = require('./mouseControl');
+    const found = await appIdentity(r.filePaths[0]);
+    return found ? { ...found, path: r.filePaths[0] } : { error: 'no-id' };
   });
 
   handle('keepAwake:get', () => keepAwake.state());

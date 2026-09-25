@@ -602,8 +602,8 @@ module.exports = async function smoke(ctx) {
     const sw = settingsWindow.show('general');
     await until(() => settingsWindow.ready, 8000);
     await wait(800);
-    setSettings({ screenOcrEnabled: true, windowSnapEnabled: true, focusFollowMouse: { enabled: true }, keepAwake: { enabled: true, followCapsLock: true } });
-    const sections = ['welcome', 'general', 'history', 'shortcuts', 'privacy', 'shelf', 'shelfAdvanced', 'screenOcr', 'snap', 'focus', 'keepAwake', 'sync', 'permissions', 'update', 'about'];
+    setSettings({ screenOcrEnabled: true, windowSnapEnabled: true, focusFollowMouse: { enabled: true }, keepAwake: { enabled: true, followCapsLock: true }, mouse: { ...getSettings().mouse, enabled: true } });
+    const sections = ['welcome', 'general', 'history', 'shortcuts', 'privacy', 'shelf', 'shelfAdvanced', 'screenOcr', 'snap', 'focus', 'mouse', 'keepAwake', 'sync', 'permissions', 'update', 'about'];
     let broken = [];
     for (const [i, id] of sections.entries()) {
       sw.webContents.send('settings:section', id);

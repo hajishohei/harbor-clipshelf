@@ -19,6 +19,7 @@ const DEFAULT_SHORTCUTS = {
   // その他
   screenOcr: `${CMD}+Shift+2`,
   toggleKeepAwake: '',
+  toggleMouse: '', // マウス操作の一時停止／再開
   snapLeft: `${SNAP}+Left`,
   snapRight: `${SNAP}+Right`,
   snapTop: `${SNAP}+Up`,
@@ -43,6 +44,8 @@ const DEFAULT_SHORTCUTS = {
 const LOCAL_SHORTCUTS = ['nextPinboard', 'prevPinboard'];
 
 const sounds = require('./sounds');
+const mouseBindings = require('../shared/mouseBindings');
+const layouts = require('../shared/layouts');
 const soundDefaults = sounds.defaultsFor();
 
 const ENUMS = {
@@ -131,6 +134,8 @@ const DEFAULTS = {
   windowSnapEnabled: false,
   focusFollowMouse: { enabled: false, delayMs: 250 },
   keepAwake: { enabled: false, mode: 'system', followCapsLock: false },
+  // マウス操作（Logicool Options+ 相当）
+  mouse: mouseBindings.DEFAULTS,
   // Windows の「マウスを乗せたウィンドウをアクティブにする」設定を、
   // ON にする前の値。OFF に戻すときに復元する。
   xmouseOriginal: null,
@@ -171,6 +176,7 @@ function normalize(parsed) {
   const rawShortcuts = { ...(raw.shortcuts || {}) };
   s.focusFollowMouse = { ...DEFAULTS.focusFollowMouse, ...(raw.focusFollowMouse || {}) };
   s.keepAwake = { ...DEFAULTS.keepAwake, ...(raw.keepAwake || {}) };
+  s.mouse = mouseBindings.normalize(raw.mouse, { snapActions: layouts.ACTIONS });
   const from = Number(raw.version) || (Object.keys(raw).length ? 1 : DEFAULTS.version);
 
   // v1 → v2
